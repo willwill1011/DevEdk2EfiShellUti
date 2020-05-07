@@ -518,6 +518,95 @@ FunctionKey3(
   //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
   return EFI_SUCCESS;
 }
+//modify offset and value on bios data area table
+EFI_STATUS
+BDSF3(
+    IN UINT64 BDSAddress)
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  EFI_CPU_IO2_PROTOCOL *IoDev;
+
+  UINT8 OffsetCount, ValueCount;
+  UINT64 ModifyOffset, ModifyValue;
+  CHAR16 OffsetArr[3] = {0}, ValueArr[8] = {0};
+  BOOLEAN InputCheck = FALSE; //flag to top or sub menu
+  OffsetCount = 0;
+  ValueCount = 0;
+
+  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"LocateHandleBuffer fail.\r\n");
+  }
+
+  Print(L"\n Modify Offset: 0x");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (OffsetCount < 2))
+      {
+        OffsetArr[OffsetCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", OffsetArr[OffsetCount]);
+        OffsetCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (OffsetCount == 2))
+      {
+        //Print(L"\n OffsetArr=%c %c", OffsetArr[0], OffsetArr[1]);
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (OffsetCount > 0) && (OffsetCount <= 2))
+      {
+        OffsetCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  Status = ShellConvertStringToUint64(OffsetArr, &ModifyOffset, TRUE, TRUE);
+  //Print(L"\n ModifyOffset=%x", *ModifyOffset);
+
+  Print(L"\n Modify Value: 0x");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (ValueCount < 2))
+      {
+        ValueArr[ValueCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", ValueArr[ValueCount]);
+        ValueCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (ValueCount == 2))
+      {
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (ValueCount > 0) && (ValueCount <= 2))
+      {
+        ValueCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  ShellConvertStringToUint64(ValueArr, &ModifyValue, TRUE, TRUE);
+  //Print(L"\nModifyValue=%x", *ModifyValue);
+
+  IoDev->Mem.Write(IoDev, EfiCpuIoWidthUint8, BDSAddress + ModifyOffset, 1, &ModifyValue);
+
+  //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
+  return EFI_SUCCESS;
+}
 // pci utility program
 EFI_STATUS
 PciMainProgram()
@@ -779,25 +868,50 @@ EFI_STATUS
 CpuIo2Protocol()
 {
   EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
   EFI_CPU_IO2_PROTOCOL *IoDev;
 
-  UINT32 Address = 0x80000000;
-  //UINTN Count = 1;
-  UINT32 PciTable[64];
-  UINT8 Data = 0;
+  UINT64 BDSAddress = 0x0000000000000400;
+  UINT32 Data[64];
+  BOOLEAN Go = TRUE;
 
   Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
   }
-
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint32, PCI_INDEX_IO_PORT, 1, &Address);
-  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint16, PCI_DATA_IO_PORT, 2, PciTable);
-  Print(L"\n Value=%x %x \n", PciTable[0], PciTable[1]);
-
-  IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint8, 0x00000000000004F0, 1, &Data);
-  Print(L"\n BIOS Data=%x \n", Data);
+  gST->ConOut->ClearScreen(gST->ConOut);
+  IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint32, BDSAddress, 64, &Data);
+  Print(L"BDA Memory Address:0x400 - 0x4FF\n");
+  //Print(L"\n BIOS Data=%x \n", Data[255]);
+  PrintTableByMode(Data, 0);
+  Print(L"\nUse <F3> to Modify the Value");
+  Print(L"\nUse <Esc> to Quit");
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
+    {
+      // print the bios data area table
+      Print(L"\n scancode=%x \n", Key.ScanCode);
+      switch (Key.ScanCode)
+      {
+      case SCAN_F3:
+        BDSF3(BDSAddress);
+        break;
+      case SCAN_ESC:
+        Go = FALSE;
+        break;
+      default:
+        gST->ConOut->ClearScreen(gST->ConOut);
+        IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint32, BDSAddress, 64, &Data);
+        Print(L"BDA Memory Address:0x400 - 0x4FF\n");
+        PrintTableByMode(Data, 0);
+        break;
+      }
+    }
+    gBS->Stall(100000);
+  }
   return EFI_SUCCESS;
 }
 
@@ -852,6 +966,7 @@ UefiMain(
           PciMainProgram();
           break;
         case BDSUtility:
+          CpuIo2Protocol();
           break;
         case CMOSUtility:
           break;
