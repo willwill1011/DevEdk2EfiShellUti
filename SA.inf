@@ -38,4 +38,6 @@
   ShellLib
 
 [Protocols]
-  gEfiSimpleTextInputExProtocolGuid
+  gEfiSimpleTextInputExProtocolGuid # EFI_SIMPLE_TEXT_INPUT_PROTOCOL
+  gEfiPciRootBridgeIoProtocolGuid   # EFI PCI I/O Protocol
+  gEfiCpuIo2ProtocolGuid            # EFI_CPU_IO2_PROTOCOL
