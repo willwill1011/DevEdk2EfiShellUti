@@ -27,6 +27,11 @@ extern EFI_SYSTEM_TABLE *gST;
 #define SCAN_ESC 0x0017
 #define CHAR_BACKSPACE 0x0008
 #define CHAR_CARRIAGE_RETURN 0x000D
+
+#define PciUtility 1
+#define BDSUtility 2
+#define CMOSUtility 3
+
 //top bar display Bus Decvice Function Number
 EFI_STATUS
 PciAddrToBDF(
@@ -513,24 +518,23 @@ FunctionKey3(
   //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
   return EFI_SUCCESS;
 }
-
+// pci utility program
 EFI_STATUS
-PciMainProgram(IN EFI_HANDLE ImageHandle,
-               IN EFI_SYSTEM_TABLE *SystemTable)
+PciMainProgram()
 {
   EFI_INPUT_KEY Key;
   EFI_STATUS Status;
-  UINT32 PciAddrArray[1000];                                           //array for pci device addresses
-  UINT32 GetNumberOfPci = 0;                                           //number of all pci devices
-  UINT32 PciAddr = 0x80000000;                                         //pci configuration space address
-  UINT8 rowPci = 0, row = 1;                                           //cursor position
-  UINT8 PageCount = 0;                                                 //count page up/down to display 20 items per page
-  UINT8 Byte = 0, FTwo = 0;                                            //default display mode: Byte and circle variable: FTwo
-  BOOLEAN FlagTopMenu = TRUE;                                          //switch to top or next menu
-  UINT64 GetModifyValue, GetModifyOffset;                              //return modified offset and value from Function Key 3
-  PciBusScan(PciAddrArray, &GetNumberOfPci);                           //scan all pci devices
-  PrintTopMenu(PciAddrArray, 0, GetNumberOfPci);                       //list all single function pci device
-  SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row); //set cursor default position
+  UINT32 PciAddrArray[1000];                           //array for pci device addresses
+  UINT32 GetNumberOfPci = 0;                           //number of all pci devices
+  UINT32 PciAddr = 0x80000000;                         //pci configuration space address
+  UINT8 rowPci = 0, row = 1;                           //cursor position
+  UINT8 PageCount = 0;                                 //count page up/down to display 20 items per page
+  UINT8 Byte = 0, FTwo = 0;                            //default display mode: Byte and circle variable: FTwo
+  BOOLEAN FlagTopMenu = TRUE;                          //switch to top or next menu
+  UINT64 GetModifyValue, GetModifyOffset;              //return modified offset and value from Function Key 3
+  PciBusScan(PciAddrArray, &GetNumberOfPci);           //scan all pci devices
+  PrintTopMenu(PciAddrArray, 0, GetNumberOfPci);       //list all single function pci device
+  gST->ConOut->SetCursorPosition(gST->ConOut, 1, row); //set cursor default position
   while (1)
   {
     Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
@@ -539,18 +543,18 @@ PciMainProgram(IN EFI_HANDLE ImageHandle,
       //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
       if ((FlagTopMenu) && (SCAN_ESC == Key.ScanCode)) //escape from top menu to terminal
       {
-        SystemTable->ConOut->ClearScreen(gST->ConOut); //clear screen
+        gST->ConOut->ClearScreen(gST->ConOut); //clear screen
         break;
       }
       if ((FlagTopMenu) && (SCAN_UP == Key.ScanCode) && (row - 1 > 0)) //move cursor on top menu - <Up>
       {
         row--;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
       }
       if ((FlagTopMenu) && (SCAN_DOWN == Key.ScanCode) && (row < 20) && ((row + PageCount * 20) < GetNumberOfPci)) //move cursor on top menu - <Down>
       {
         row++;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
         //Print(L"--%d--GetNumberOfPci=%d-----\n", row, GetNumberOfPci);
       }
       if ((FlagTopMenu) && (SCAN_PAGEDOWN == Key.ScanCode) && (((PageCount + 1) * 20) < GetNumberOfPci)) //page down top menu - <Down>
@@ -558,14 +562,14 @@ PciMainProgram(IN EFI_HANDLE ImageHandle,
         PageCount++;
         PrintTopMenu(PciAddrArray, PageCount * 20, GetNumberOfPci);
         row = 1;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
       }
       if ((FlagTopMenu) && (SCAN_PAGEUP == Key.ScanCode) && (PageCount > 0)) //page up top menu - <Up>
       {
         PageCount--;
         PrintTopMenu(PciAddrArray, PageCount * 20, GetNumberOfPci);
         row = 1;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
       }
       if ((FlagTopMenu) && (CHAR_CARRIAGE_RETURN == Key.UnicodeChar)) //select pci device from top menu - <Enter>
       {
@@ -582,7 +586,7 @@ PciMainProgram(IN EFI_HANDLE ImageHandle,
         PrintTopMenu(PciAddrArray, PageCount * 20, GetNumberOfPci);
         FlagTopMenu = TRUE;
         row = 1;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
         FTwo = 0;
       }
       if ((!FlagTopMenu) && (SCAN_UP == Key.ScanCode) && (row - 1 > 0)) //switch pci table from sub menu - <Up>
@@ -644,7 +648,72 @@ PciMainProgram(IN EFI_HANDLE ImageHandle,
   }
   return EFI_SUCCESS;
 }
+// not used
+EFI_STATUS
+PrintMainMenu()
+{
+  EFI_INPUT_KEY Key;
+  EFI_STATUS Status;
+  UINT8 row = 1;
+  gST->ConOut->ClearScreen(gST->ConOut);
+  Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n");
+  Print(L"\n [Esc] to Exit \n");
+  gST->ConOut->SetCursorPosition(gST->ConOut, 1, row); //set cursor default position
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
+    {
+      if (SCAN_ESC == Key.ScanCode) //escape from top menu to terminal
+      {
+        gST->ConOut->ClearScreen(gST->ConOut);
+        break;
+      }
+      if ((SCAN_UP == Key.ScanCode) && (row - 1 > 0)) //move cursor on top menu - <Up>
+      {
+        row--;
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
+      }
+      if ((SCAN_DOWN == Key.ScanCode) && (row < 3)) //move cursor on top menu - <Down>
+      {
+        row++;
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
+      }
+      if (CHAR_CARRIAGE_RETURN == Key.UnicodeChar) //select pci device from top menu - <Enter>
+      {
+        switch (row)
+        {
+        case PciUtility:
+          PciMainProgram();
+          break;
 
+        case BDSUtility:
+          break;
+
+        case CMOSUtility:
+          break;
+        }
+        gST->ConOut->ClearScreen(gST->ConOut);
+        Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n");
+        Print(L"\n [Esc] to Exit \n");
+        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row); //set cursor default position
+      }
+    }
+    gBS->Stall(15000);
+  }
+  return EFI_SUCCESS;
+}
+// prompt words on menu
+EFI_STATUS
+PromptMainMenu()
+{
+  gST->ConOut->ClearScreen(gST->ConOut);
+  Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n");
+  Print(L"\n [Esc] to Exit \n");
+  gST->ConOut->SetCursorPosition(gST->ConOut, 1, 1); //set cursor default position
+  return EFI_SUCCESS;
+}
+// test
 EFI_STATUS
 TestPciRootBridgeIoProtocol()
 {
@@ -705,7 +774,7 @@ TestPciRootBridgeIoProtocol()
   }
   return EFI_SUCCESS;
 }
-
+// replace ioread/iowrite
 EFI_STATUS
 CpuIo2Protocol()
 {
@@ -745,136 +814,53 @@ UefiMain(
     IN EFI_HANDLE ImageHandle,
     IN EFI_SYSTEM_TABLE *SystemTable)
 {
-  /*
   EFI_INPUT_KEY Key;
   EFI_STATUS Status;
-  UINT32 PciAddrArray[1000];                                           //array for pci device addresses
-  UINT32 GetNumberOfPci = 0;                                           //number of all pci devices
-  UINT32 PciAddr = 0x80000000;                                         //pci configuration space address
-  UINT8 rowPci = 0, row = 1;                                           //cursor position
-  UINT8 PageCount = 0;                                                 //count page up/down to display 20 items per page
-  UINT8 Byte = 0, FTwo = 0;                                            //default display mode: Byte and circle variable: FTwo
-  BOOLEAN FlagTopMenu = TRUE;                                          //switch to top or next menu
-  UINT64 GetModifyValue, GetModifyOffset;                              //return modified offset and value from Function Key 3
-  PciBusScan(PciAddrArray, &GetNumberOfPci);                           //scan all pci devices
-  PrintTopMenu(PciAddrArray, 0, GetNumberOfPci);                       //list all single function pci device
-  SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row); //set cursor default position
-  while (1)
+  UINT8 row = 1;
+  BOOLEAN Go = TRUE;
+
+  PromptMainMenu();
+  while (Go)
   {
     Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
     if (Status == EFI_SUCCESS)                            //fail will back to while loop
     {
-      //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
-      if ((FlagTopMenu) && (SCAN_ESC == Key.ScanCode)) //escape from top menu to terminal
+      switch (Key.ScanCode)
       {
-        SystemTable->ConOut->ClearScreen(gST->ConOut); //clear screen
+      case SCAN_ESC:
+        gST->ConOut->ClearScreen(gST->ConOut);
+        Go = FALSE; // Exit while(Go) loop
+        break;
+      case SCAN_UP:
+        if (row - 1 > 0)
+        {
+          row--;
+          gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
+        }
+        break;
+      case SCAN_DOWN:
+        if (row < 3)
+        {
+          row++;
+          gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
+        }
+        break;
+      default: //instead of case CHAR_CARRIAGE_RETURN because it is NOT ScanCode but UnicodeChar
+        switch (row)
+        {
+        case PciUtility:
+          PciMainProgram();
+          break;
+        case BDSUtility:
+          break;
+        case CMOSUtility:
+          break;
+        }
+        PromptMainMenu();
         break;
       }
-      if ((FlagTopMenu) && (SCAN_UP == Key.ScanCode) && (row - 1 > 0)) //move cursor on top menu - <Up>
-      {
-        row--;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
-      }
-      if ((FlagTopMenu) && (SCAN_DOWN == Key.ScanCode) && (row < 20) && ((row + PageCount * 20) < GetNumberOfPci)) //move cursor on top menu - <Down>
-      {
-        row++;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
-        //Print(L"--%d--GetNumberOfPci=%d-----\n", row, GetNumberOfPci);
-      }
-      if ((FlagTopMenu) && (SCAN_PAGEDOWN == Key.ScanCode) && (((PageCount + 1) * 20) < GetNumberOfPci)) //page down top menu - <Down>
-      {
-        PageCount++;
-        PrintTopMenu(PciAddrArray, PageCount * 20, GetNumberOfPci);
-        row = 1;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
-      }
-      if ((FlagTopMenu) && (SCAN_PAGEUP == Key.ScanCode) && (PageCount > 0)) //page up top menu - <Up>
-      {
-        PageCount--;
-        PrintTopMenu(PciAddrArray, PageCount * 20, GetNumberOfPci);
-        row = 1;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
-      }
-      if ((FlagTopMenu) && (CHAR_CARRIAGE_RETURN == Key.UnicodeChar)) //select pci device from top menu - <Enter>
-      {
-        //row += PageCount * 20;
-        rowPci = row + PageCount * 20;
-        PciAddr = PciAddrArray[rowPci - 1]; // row starts from 1; row - 1 for array index
-        PrintNextMenu(PciAddr, Byte);
-        //Go to Next Menu
-        FlagTopMenu = FALSE;
-      }
-      if ((!FlagTopMenu) && (SCAN_ESC == Key.ScanCode)) //quit top menu - <Esc>
-      {
-        //Back to Top Menu
-        PrintTopMenu(PciAddrArray, PageCount * 20, GetNumberOfPci);
-        FlagTopMenu = TRUE;
-        row = 1;
-        SystemTable->ConOut->SetCursorPosition(SystemTable->ConOut, 1, row);
-        FTwo = 0;
-      }
-      if ((!FlagTopMenu) && (SCAN_UP == Key.ScanCode) && (row - 1 > 0)) //switch pci table from sub menu - <Up>
-      {
-        //Switch to <UP> Pci Table
-        row--;
-        PciAddr = PciAddrArray[row - 1 + PageCount * 20]; //index of array = row - 1
-        PrintNextMenu(PciAddr, Byte);
-        //Print(L"\n----row=%d----", row);
-        FTwo = 0; // reset SCAN_F2 key to default Mode
-      }
-      if ((!FlagTopMenu) && (SCAN_DOWN == Key.ScanCode) && ((row + 1 + PageCount * 20) <= GetNumberOfPci)) //switch pci table from sub menu - <Down>
-      {
-        //TODO: press down key jump to next address which is out of the page size
-        // 0 < r <= 20
-        if ((PageCount == 0) && (row + 1 <= GetNumberOfPci))
-        {
-
-          //Switch to <DOWN> Pci Table
-          row++;
-          PciAddr = PciAddrArray[row - 1 + PageCount * 20]; //index of array = row - 1
-          PrintNextMenu(PciAddr, Byte);
-          //Print(L"\n----row=%d----", row);
-        }
-        else if ((PageCount > 0) && (row + 1 <= 20))
-        {
-          row++;
-          PciAddr = PciAddrArray[row - 1 + PageCount * 20]; //index of array = row - 1
-          PrintNextMenu(PciAddr, Byte);
-        }
-      }
-      else if ((!FlagTopMenu) && (SCAN_DOWN == Key.ScanCode) && (row + 1 <= (GetNumberOfPci % 20))) //switch pci table from sub menu - <Down>
-      {
-        //Switch to <DOWN> Pci Table
-        row++;
-        PciAddr = PciAddrArray[row - 1 + PageCount * 20]; //index of array = row - 1
-        PrintNextMenu(PciAddr, Byte);
-        //Print(L"\n----row=%d----", row);
-      }
-      if ((!FlagTopMenu) && (SCAN_F2 == Key.ScanCode)) //switch display mode from sub menu - <F2>
-      {
-        //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
-        FTwo++;
-        PrintNextMenu(PciAddr, FTwo % 3);
-      }
-      if ((!FlagTopMenu) && (SCAN_F3 == Key.ScanCode)) //modify pci table from sub menu - <F3>
-      {
-        //TODO: ModifyOffset
-        //  if FTwo%3=0 ignore
-        //  if FTwo%3=1 word: offset  & 0x00ff
-        //  if FTwo%3=1 dword: offset & 0x000000ff
-        //Print(L"\n FTwo=%d", FTwo);
-        FunctionKey3(PciAddr, FTwo % 3, &GetModifyOffset, &GetModifyValue);
-        PrintNextMenu(PciAddr, FTwo % 3);                                                  //print table
-        Print(L"\nWrite Value 0x%02x to Offset 0x%02x ", GetModifyValue, GetModifyOffset); //prompt input offset and value
-      }                                                                                    //end if ((!FlagTopMenu) && (SCAN_F3 == Key.ScanCode))
-    }                                                                                      //end if (Status == EFI_SUCCESS)
-    gBS->Stall(150000);                                                                    //delay mini seconds
-  }                                                                                        //end while(1)
-
-  */
-
-  PciMainProgram(ImageHandle, SystemTable);
-  CpuIo2Protocol();
-  Print(L"---End of Main---\n");
-  return 0;
+    }
+    gBS->Stall(15000);
+  }
+  return EFI_SUCCESS;
 }
