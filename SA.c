@@ -15,6 +15,8 @@
 
 extern EFI_SYSTEM_TABLE *gST;
 
+#define CMOS_INDEX_IO_PORT 0x70
+#define CMOS_DATA_IO_PORT 0x71
 #define PCI_INDEX_IO_PORT 0xCF8
 #define PCI_DATA_IO_PORT 0xCFC
 #define SCAN_NULL 0x0000
@@ -527,12 +529,11 @@ BDSF3(
   EFI_INPUT_KEY Key;
   EFI_CPU_IO2_PROTOCOL *IoDev;
 
-  UINT8 OffsetCount, ValueCount;
+  UINT8 OffsetCount = 0, ValueCount = 0;
+  UINT32 Data[64];
   UINT64 ModifyOffset, ModifyValue;
   CHAR16 OffsetArr[3] = {0}, ValueArr[8] = {0};
-  BOOLEAN InputCheck = FALSE; //flag to top or sub menu
-  OffsetCount = 0;
-  ValueCount = 0;
+  BOOLEAN InputCheck = FALSE;
 
   Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
   if (EFI_ERROR(Status))
@@ -570,7 +571,6 @@ BDSF3(
     gBS->Stall(15000);
   }
   Status = ShellConvertStringToUint64(OffsetArr, &ModifyOffset, TRUE, TRUE);
-  //Print(L"\n ModifyOffset=%x", *ModifyOffset);
 
   Print(L"\n Modify Value: 0x");
   while (1)
@@ -600,11 +600,15 @@ BDSF3(
     gBS->Stall(15000);
   }
   ShellConvertStringToUint64(ValueArr, &ModifyValue, TRUE, TRUE);
-  //Print(L"\nModifyValue=%x", *ModifyValue);
 
   IoDev->Mem.Write(IoDev, EfiCpuIoWidthUint8, BDSAddress + ModifyOffset, 1, &ModifyValue);
-
-  //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
+  gST->ConOut->ClearScreen(gST->ConOut);
+  IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint32, BDSAddress, 64, &Data);
+  Print(L"BDA Memory Address:0x400 - 0x4FF\n");
+  PrintTableByMode(Data, 0);
+  Print(L"\nModify Offset=0x%x Modify Value=0x%x", ModifyOffset, ModifyValue);
+  Print(L"\nUse <F3> to Modify the Value");
+  Print(L"\nUse <Esc> to Quit");
   return EFI_SUCCESS;
 }
 // pci utility program
@@ -863,9 +867,9 @@ TestPciRootBridgeIoProtocol()
   }
   return EFI_SUCCESS;
 }
-// replace ioread/iowrite
+// Bios Data Area Main Program
 EFI_STATUS
-CpuIo2Protocol()
+BDAMainProgram()
 {
   EFI_STATUS Status;
   EFI_INPUT_KEY Key;
@@ -875,15 +879,16 @@ CpuIo2Protocol()
   UINT32 Data[64];
   BOOLEAN Go = TRUE;
 
+  gST->ConOut->ClearScreen(gST->ConOut);
+
   Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
   }
-  gST->ConOut->ClearScreen(gST->ConOut);
   IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint32, BDSAddress, 64, &Data);
+
   Print(L"BDA Memory Address:0x400 - 0x4FF\n");
-  //Print(L"\n BIOS Data=%x \n", Data[255]);
   PrintTableByMode(Data, 0);
   Print(L"\nUse <F3> to Modify the Value");
   Print(L"\nUse <Esc> to Quit");
@@ -892,8 +897,6 @@ CpuIo2Protocol()
     Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
     if (Status == EFI_SUCCESS)                            //fail will back to while loop
     {
-      // print the bios data area table
-      Print(L"\n scancode=%x \n", Key.ScanCode);
       switch (Key.ScanCode)
       {
       case SCAN_F3:
@@ -902,16 +905,108 @@ CpuIo2Protocol()
       case SCAN_ESC:
         Go = FALSE;
         break;
-      default:
-        gST->ConOut->ClearScreen(gST->ConOut);
-        IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint32, BDSAddress, 64, &Data);
-        Print(L"BDA Memory Address:0x400 - 0x4FF\n");
-        PrintTableByMode(Data, 0);
+      }
+    }
+    gBS->Stall(100000);
+  }
+  return EFI_SUCCESS;
+}
+// CMOS Main Program
+EFI_STATUS
+CMOSMainProgram()
+{
+  EFI_STATUS Status;
+  //EFI_INPUT_KEY Key;
+  EFI_CPU_IO2_PROTOCOL *IoDev;
+
+  //UINT8 RegB = 0;
+  UINT16 i = 0;
+  UINT16 j, k;
+  //UINT8 RegBValue;
+  UINT8 Value, Data[256];
+  //BOOLEAN Go = TRUE;
+
+  gST->ConOut->ClearScreen(gST->ConOut);
+
+  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"LocateHandleBuffer fail.\r\n");
+  }
+
+  while (1)
+  {
+    for (i = 0; i < 256; i++)
+    {
+      IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &i);
+      IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &Value);
+      Data[i] = Value;
+      //Print(L" Data[%d]=%x ", i, Data[i]);
+    }
+
+    for (i = 0; i < 16; i++)
+    {
+      //print empty row to align row index
+      if (i == 0)
+      {
+        Print(L"   ");
+      }
+      Print(L"%02x ", i); //print column index: 00 01 .... 0F
+    }
+    Print(L"\n");
+    k = 0;
+    for (j = 0; j < 256; j++)
+    {
+      if (j % 16 == 0)
+      {
+        Print(L"%02x ", k++); //print row index: 00 01 ... 0F
+        Print(L"%02x ", Data[j]);
+      }
+      else if (j % 16 == 15)
+      {
+        Print(L"%02x \n", Data[j]);
+      }
+      else
+      {
+        Print(L"%02x ", Data[j]);
+      }
+    }
+    gBS->Stall(1000000);
+    gST->ConOut->ClearScreen(gST->ConOut);
+  }
+  /*
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
+  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+  Print(L"\n RegBValue=%x\n", RegBValue);
+  RegBValue = RegBValue | 0x80; // Disable NMI
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+  Print(L"\n After Disable NMI RegBValue=%x\n", RegBValue);
+  
+  Print(L"BDA Memory Address:0x400 - 0x4FF\n");
+  PrintTableByMode(Data, 0);
+  Print(L"\nUse <F3> to Modify the Value");
+  Print(L"\nUse <Esc> to Quit");
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
+    {
+      switch (Key.ScanCode)
+      {
+      case SCAN_F3:
+        BDSF3(BDSAddress);
+        break;
+      case SCAN_ESC:
+        Go = FALSE;
         break;
       }
     }
     gBS->Stall(100000);
   }
+
+  */
   return EFI_SUCCESS;
 }
 
@@ -966,9 +1061,10 @@ UefiMain(
           PciMainProgram();
           break;
         case BDSUtility:
-          CpuIo2Protocol();
+          BDAMainProgram();
           break;
         case CMOSUtility:
+          CMOSMainProgram();
           break;
         }
         PromptMainMenu();
