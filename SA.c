@@ -141,7 +141,7 @@ PortIoRead32(
   }
   return EFI_SUCCESS;
 }
-//replaced by PrintTableByMode
+// DWord 4 bytes x64 to Word 2 bytes x128
 EFI_STATUS
 TransferDWordToWordTable(
     IN UINT32 *PciTable,
@@ -151,6 +151,21 @@ TransferDWordToWordTable(
   {
     WordTable[2 * j] = (PciTable[j] & 0xffff0000);
     WordTable[2 * j + 1] = (PciTable[j] & 0x0000ffff) >> 16;
+  }
+  return EFI_SUCCESS;
+}
+// DWord 1 byte x256 to DWord 4 bytes x64
+EFI_STATUS
+TransferByteToDWordTable(
+    IN UINT8 *ByteTable,
+    OUT UINT32 *DWordTable)
+{
+  for (UINT16 j = 0; j < 256; j += 4)
+  {
+    DWordTable[j / 4] = (((ByteTable[j + 3] & 0x000000ff) << 24) | ((ByteTable[j + 2] & 0x000000ff) << 16) | ((ByteTable[j + 1] & 0x000000ff) << 8) | (ByteTable[j] & 0x000000ff));
+    //Print(L"ByteTable[%d]=%x  ", j, ByteTable[j]);
+    //Print(L"DWordTable[j / 4]=%x \n", DWordTable[j / 4]);
+    //gBS->Stall(1000000);
   }
   return EFI_SUCCESS;
 }
@@ -168,7 +183,7 @@ PrintTableByMode(
   switch (Mode)
   {
   case 0: // Print Byte Table
-    //Transfer Word To Byte Table
+    //Transfer DWord To Byte Table
     for (j = 0; j < 64; j++)
     {
       ByteTable[4 * j] = (PciTable[j] & 0x000000ff);
@@ -518,6 +533,35 @@ FunctionKey3(
     IoWrite32(PCI_DATA_IO_PORT, *ModifyValue); //write value
   }
   //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
+  return EFI_SUCCESS;
+}
+//read io port data to dword table
+EFI_STATUS
+ReadCMOSToDWordTable(OUT UINT32 *DWordTable)
+{
+  EFI_STATUS Status;
+  EFI_CPU_IO2_PROTOCOL *IoDev;
+
+  UINT16 i = 0;
+  UINT8 Value, Data[256];
+
+  gST->ConOut->ClearScreen(gST->ConOut);
+  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"LocateHandleBuffer fail.\r\n");
+  }
+
+  for (i = 0; i < 256; i++)
+  {
+    IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &i);
+    IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &Value);
+    Data[i] = Value;
+    //Print(L" Data[%d]=%x  ", i, Data[i]);
+  }
+  //gBS->Stall(5000000);
+  TransferByteToDWordTable(Data, DWordTable);
+
   return EFI_SUCCESS;
 }
 //modify offset and value on bios data area table
@@ -911,64 +955,142 @@ BDAMainProgram()
   }
   return EFI_SUCCESS;
 }
-// CMOS Main Program
+//modify offset and value on cmos
 EFI_STATUS
-CMOSMainProgram()
+CMOSF3()
 {
   EFI_STATUS Status;
-  //EFI_INPUT_KEY Key;
+  EFI_INPUT_KEY Key;
   EFI_CPU_IO2_PROTOCOL *IoDev;
 
-  //UINT8 RegB = 0;
-  UINT16 i = 0;
-  UINT16 j, k;
-  //UINT8 RegBValue;
-  UINT8 Value, Data[256];
-  //BOOLEAN Go = TRUE;
+  UINT8 OffsetCount = 0, ValueCount = 0;
+  UINT64 ModifyOffset, ModifyValue; // modify offset and value
+  UINT8 RegB = 0x0B;                // Enable(0) or Disable(1) NMI on bit 7
+  UINT8 RegBValue = 0;
+  CHAR16 OffsetArr[3] = {0}, ValueArr[8] = {0};
+  BOOLEAN InputCheck = FALSE;
 
-  gST->ConOut->ClearScreen(gST->ConOut);
+  Print(L"\n Modify Offset: 0x");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (OffsetCount < 2))
+      {
+        OffsetArr[OffsetCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", OffsetArr[OffsetCount]);
+        OffsetCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (OffsetCount == 2))
+      {
+        //Print(L"\n OffsetArr=%c %c", OffsetArr[0], OffsetArr[1]);
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (OffsetCount > 0) && (OffsetCount <= 2))
+      {
+        OffsetCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  Status = ShellConvertStringToUint64(OffsetArr, &ModifyOffset, TRUE, TRUE);
 
+  Print(L"\n Modify Value: 0x");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (ValueCount < 2))
+      {
+        ValueArr[ValueCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", ValueArr[ValueCount]);
+        ValueCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (ValueCount == 2))
+      {
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (ValueCount > 0) && (ValueCount <= 2))
+      {
+        ValueCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  ShellConvertStringToUint64(ValueArr, &ModifyValue, TRUE, TRUE);
+
+  // Disable NMI
   Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
   }
 
-  while (1)
-  {
-    for (i = 0; i < 256; i++)
-    {
-      IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &i);
-      IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &Value);
-      Data[i] = Value;
-      //Print(L" Data[%d]=%x ", i, Data[i]);
-    }
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
+  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+  //Print(L"\n RegBValue=%x\n", RegBValue);
+  RegBValue = RegBValue | 0x80; // set bit 7 to 1 to Disable NMI
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
 
-    for (i = 0; i < 16; i++)
+  // Modify Value on Offset
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &ModifyOffset);
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &ModifyValue);
+
+  RegBValue = RegBValue & 0x7F; // set bit 7 to 0 to Enable NMI
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+
+  //Print(L"\nModify Offset=0x%x Modify Value=0x%x", ModifyOffset, ModifyValue);
+  //Print(L"\nUse <F3> to Modify the Value");
+  //Print(L"\nUse <Esc> to Quit");
+  return EFI_SUCCESS;
+}
+// CMOS Main Program
+EFI_STATUS
+CMOSMainProgram()
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+
+  UINT32 Data[64]; // cmos table
+  BOOLEAN Go = TRUE;
+
+  while (Go)
+  {
+    // Read and Print CMOS Table
+    ReadCMOSToDWordTable(Data);
+    Print(L"CMOS Register List\n");
+    PrintTableByMode(Data, 0);
+    Print(L"\nUse <F3> to Modify the Value");
+    Print(L"\nUse <Esc> to Quit");
+
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
     {
-      //print empty row to align row index
-      if (i == 0)
+      switch (Key.ScanCode)
       {
-        Print(L"   ");
-      }
-      Print(L"%02x ", i); //print column index: 00 01 .... 0F
-    }
-    Print(L"\n");
-    k = 0;
-    for (j = 0; j < 256; j++)
-    {
-      if (j % 16 == 0)
-      {
-        Print(L"%02x ", k++); //print row index: 00 01 ... 0F
-        Print(L"%02x ", Data[j]);
-      }
-      else if (j % 16 == 15)
-      {
-        Print(L"%02x \n", Data[j]);
-      }
-      else
-      {
-        Print(L"%02x ", Data[j]);
+      case SCAN_F3:
+        CMOSF3();
+        break;
+
+      case SCAN_ESC:
+        Go = FALSE;
+        break;
+
+      default:
+        break;
       }
     }
     gBS->Stall(1000000);
