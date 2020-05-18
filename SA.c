@@ -14,6 +14,7 @@
 #include <Protocol/CpuIo2.h>          // EFI_CPU_IO2_PROTOCOL_GUID.Io.Read/Write
 
 extern EFI_SYSTEM_TABLE *gST;
+extern EFI_BOOT_SERVICES *gBS;
 
 #define CMOS_INDEX_IO_PORT 0x70
 #define CMOS_DATA_IO_PORT 0x71
@@ -33,6 +34,7 @@ extern EFI_SYSTEM_TABLE *gST;
 #define PciUtility 1
 #define BDSUtility 2
 #define CMOSUtility 3
+#define MemUtility 4
 
 //top bar display Bus Decvice Function Number
 EFI_STATUS
@@ -535,6 +537,44 @@ FunctionKey3(
   //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
   return EFI_SUCCESS;
 }
+// Enable NMI
+EFI_STATUS
+CMOSEnableNMI()
+{
+  EFI_STATUS Status;
+  EFI_CPU_IO2_PROTOCOL *IoDev;
+  UINT8 RegBValue = 0;
+
+  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
+  }
+  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegBValue);
+  RegBValue |= 0x80; // Enable NMI
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegBValue);
+  return EFI_SUCCESS;
+}
+// Disable NMI
+EFI_STATUS
+CMOSDisableNMI()
+{
+  EFI_STATUS Status;
+  EFI_CPU_IO2_PROTOCOL *IoDev;
+  UINT8 RegBValue = 0;
+
+  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
+  }
+  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegBValue);
+  RegBValue &= 0x7F;
+  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegBValue);
+  return EFI_SUCCESS;
+}
 //read io port data to dword table
 EFI_STATUS
 ReadCMOSToDWordTable(OUT UINT32 *DWordTable)
@@ -545,13 +585,14 @@ ReadCMOSToDWordTable(OUT UINT32 *DWordTable)
   UINT16 i = 0;
   UINT8 Value, Data[256];
 
-  gST->ConOut->ClearScreen(gST->ConOut);
   Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
   }
-
+  // Disable NMI
+  CMOSDisableNMI();
   for (i = 0; i < 256; i++)
   {
     IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &i);
@@ -559,6 +600,9 @@ ReadCMOSToDWordTable(OUT UINT32 *DWordTable)
     Data[i] = Value;
     //Print(L" Data[%d]=%x  ", i, Data[i]);
   }
+  // Enable NMI
+  CMOSEnableNMI();
+
   //gBS->Stall(5000000);
   TransferByteToDWordTable(Data, DWordTable);
 
@@ -583,6 +627,7 @@ BDSF3(
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
   }
 
   Print(L"\n Modify Offset: 0x");
@@ -845,7 +890,7 @@ EFI_STATUS
 PromptMainMenu()
 {
   gST->ConOut->ClearScreen(gST->ConOut);
-  Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n");
+  Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n 4. Mem Utility\n");
   Print(L"\n [Esc] to Exit \n");
   gST->ConOut->SetCursorPosition(gST->ConOut, 1, 1); //set cursor default position
   return EFI_SUCCESS;
@@ -880,6 +925,7 @@ TestPciRootBridgeIoProtocol()
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
   }
   for (Index = 0; Index < BufferSize; Index++)
   {
@@ -929,6 +975,7 @@ BDAMainProgram()
   if (EFI_ERROR(Status))
   {
     Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
   }
   IoDev->Mem.Read(IoDev, EfiCpuIoWidthUint32, BDSAddress, 64, &Data);
 
@@ -965,11 +1012,19 @@ CMOSF3()
 
   UINT8 OffsetCount = 0, ValueCount = 0;
   UINT64 ModifyOffset, ModifyValue; // modify offset and value
-  UINT8 RegB = 0x0B;                // Enable(0) or Disable(1) NMI on bit 7
-  UINT8 RegBValue = 0;
+  //UINT8 RegB = 0x0B;                // Enable(0) or Disable(1) NMI on bit 7
+  //UINT8 RegBValue = 0;
   CHAR16 OffsetArr[3] = {0}, ValueArr[8] = {0};
   BOOLEAN InputCheck = FALSE;
 
+  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"LocateHandleBuffer fail.\r\n");
+    return Status;
+  }
+
+  gST->ConOut->SetCursorPosition(gST->ConOut, 0, 22);
   Print(L"\n Modify Offset: 0x");
   while (1)
   {
@@ -1031,26 +1086,14 @@ CMOSF3()
   ShellConvertStringToUint64(ValueArr, &ModifyValue, TRUE, TRUE);
 
   // Disable NMI
-  Status = gBS->LocateProtocol(&gEfiCpuIo2ProtocolGuid, NULL, (VOID **)&IoDev);
-  if (EFI_ERROR(Status))
-  {
-    Print(L"LocateHandleBuffer fail.\r\n");
-  }
-
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
-  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
-  //Print(L"\n RegBValue=%x\n", RegBValue);
-  RegBValue = RegBValue | 0x80; // set bit 7 to 1 to Disable NMI
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+  CMOSDisableNMI();
 
   // Modify Value on Offset
   IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &ModifyOffset);
   IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &ModifyValue);
 
-  RegBValue = RegBValue & 0x7F; // set bit 7 to 0 to Enable NMI
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
+  // Enable NMI
+  CMOSEnableNMI();
 
   //Print(L"\nModify Offset=0x%x Modify Value=0x%x", ModifyOffset, ModifyValue);
   //Print(L"\nUse <F3> to Modify the Value");
@@ -1067,14 +1110,31 @@ CMOSMainProgram()
   UINT32 Data[64]; // cmos table
   BOOLEAN Go = TRUE;
 
+  // Read and Print CMOS Table
+  ReadCMOSToDWordTable(Data);
+  gST->ConOut->ClearScreen(gST->ConOut);
+  Print(L"CMOS Register List\n\n");
+  PrintTableByMode(Data, 0);
+  Print(L"\nUse <F3> to Modify the Value");
+  Print(L"\nUse <Esc> to Quit");
+
   while (Go)
   {
-    // Read and Print CMOS Table
     ReadCMOSToDWordTable(Data);
-    Print(L"CMOS Register List\n");
-    PrintTableByMode(Data, 0);
-    Print(L"\nUse <F3> to Modify the Value");
-    Print(L"\nUse <Esc> to Quit");
+    Data[0] &= 0xff;
+    Data[3] &= 0xff; // get Reg.C
+    gST->ConOut->SetCursorPosition(gST->ConOut, 3, 1);
+    Print(L"%02x\n", Data[0]);
+    gST->ConOut->SetCursorPosition(gST->ConOut, 39, 1);
+    Print(L"%02x\n", Data[3]);
+    if (Data[0] == 0x00)
+    {
+      //gST->ConOut->ClearScreen(gST->ConOut);
+      gST->ConOut->SetCursorPosition(gST->ConOut, 0, 2);
+      PrintTableByMode(Data, 0);
+      Print(L"\nUse <F3> to Modify the Value");
+      Print(L"\nUse <Esc> to Quit");
+    }
 
     Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
     if (Status == EFI_SUCCESS)                            //fail will back to while loop
@@ -1083,6 +1143,12 @@ CMOSMainProgram()
       {
       case SCAN_F3:
         CMOSF3();
+        ReadCMOSToDWordTable(Data);
+        gST->ConOut->ClearScreen(gST->ConOut);
+        Print(L"CMOS Register List\n\n");
+        PrintTableByMode(Data, 0);
+        Print(L"\nUse <F3> to Modify the Value");
+        Print(L"\nUse <Esc> to Quit");
         break;
 
       case SCAN_ESC:
@@ -1093,8 +1159,8 @@ CMOSMainProgram()
         break;
       }
     }
-    gBS->Stall(1000000);
-    gST->ConOut->ClearScreen(gST->ConOut);
+    gBS->Stall(500000);
+    //gST->ConOut->ClearScreen(gST->ConOut);
   }
   /*
   IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
@@ -1132,6 +1198,50 @@ CMOSMainProgram()
   return EFI_SUCCESS;
 }
 
+// Mem Main Program
+EFI_STATUS
+MemMainProgram()
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+
+  EFI_MEMORY_DESCRIPTOR MemMap;
+  UINTN MemMapSize, MapKey, DescriptorSize;
+  UINT32 DescriptorVer;
+  BOOLEAN Go = TRUE;
+
+  Status = gBS->GetMemoryMap(&MemMapSize, &MemMap, &MapKey, &DescriptorSize, &DescriptorVer);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"GetMemoryMap fail.\r\n");
+    return Status;
+  }
+  gST->ConOut->ClearScreen(gST->ConOut);
+  Print(L"MemMapSize=%d, MemMap=%x, MapKey=%x, DescriptorSize=%d, DescriptorVer=%x",
+        MemMapSize, MemMap, MapKey, DescriptorSize, DescriptorVer);
+  Print(L"MemMap.PhysicalStart=%x,MemMap.VirtualStart=%x,MemMap.Type=%x,MemMap.NumberOfPages=%x,MemMap.Attribute=%x \n",
+        MemMap.PhysicalStart, MemMap.VirtualStart, MemMap.Type, MemMap.NumberOfPages, MemMap.Attribute);
+
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
+    {
+      switch (Key.ScanCode)
+      {
+      case SCAN_ESC:
+        Go = FALSE;
+        break;
+
+      default:
+        break;
+      }
+    }
+    gBS->Stall(500000);
+  }
+
+  return EFI_SUCCESS;
+}
 /**
   as the real entry point for the application.
   @param[in] ImageHandle    The firmware allocated handle for the EFI image.
@@ -1170,7 +1280,7 @@ UefiMain(
         }
         break;
       case SCAN_DOWN:
-        if (row < 3)
+        if (row < 4)
         {
           row++;
           gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
@@ -1188,12 +1298,15 @@ UefiMain(
         case CMOSUtility:
           CMOSMainProgram();
           break;
+        case MemUtility:
+          MemMainProgram();
+          break;
         }
         PromptMainMenu();
         break;
       }
     }
-    gBS->Stall(15000);
+    gBS->Stall(10000);
   }
   return EFI_SUCCESS;
 }
