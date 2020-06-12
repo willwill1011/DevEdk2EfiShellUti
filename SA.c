@@ -5,21 +5,23 @@
 **/
 #include <Uefi.h>
 #include <Base.h>
+
 #include <Library/UefiLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/IoLib.h>    // IoRead
 #include <Library/ShellLib.h> // ShellPromptForResponse
+#include <Library/DebugLib.h>
 
 #include <Protocol/PciRootBridgeIo.h> // EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL.Io.Read/Write
 #include <Protocol/CpuIo2.h>          // EFI_CPU_IO2_PROTOCOL_GUID.Io.Read/Write
 
-extern EFI_SYSTEM_TABLE *gST;
-extern EFI_BOOT_SERVICES *gBS;
-
+#if 1 // define constant value
 #define CMOS_INDEX_IO_PORT 0x70
 #define CMOS_DATA_IO_PORT 0x71
+
 #define PCI_INDEX_IO_PORT 0xCF8
 #define PCI_DATA_IO_PORT 0xCFC
+
 #define SCAN_NULL 0x0000
 #define SCAN_UP 0x0001
 #define SCAN_DOWN 0x0002
@@ -28,14 +30,302 @@ extern EFI_BOOT_SERVICES *gBS;
 #define SCAN_F2 0x000C
 #define SCAN_F3 0x000D
 #define SCAN_ESC 0x0017
+
 #define CHAR_BACKSPACE 0x0008
 #define CHAR_CARRIAGE_RETURN 0x000D
+#define CHAR_UNICODE_1 0X0031
+#define CHAR_UNICODE_2 0X0032
+#define CHAR_UNICODE_3 0X0033
+#define CHAR_UNICODE_4 0X0034
+#define CHAR_UNICODE_5 0X0035
+#define CHAR_UNICODE_6 0X0036
+#define CHAR_UNICODE_7 0X0037
+#define CHAR_UNICODE_8 0X0038
+#define CHAR_UNICODE_9 0X0039
+
+#define CHAR_UNICODE_n 0X006E
+#define CHAR_UNICODE_y 0X0079
 
 #define PciUtility 1
 #define BDSUtility 2
 #define CMOSUtility 3
 #define MemUtility 4
+#endif
 
+#if 1 // const char string
+CONST CHAR8 MemUtiMsgTop[] = "Max T. Memory Utility\r\nWhat you want ?\r\n  \
+  1. Get Current Memory Allocation Map\r\n  \
+  2. AllocatePages ().\r\n  \
+  3. AllocatePool ().\r\n  \
+  4. Show Allocated Memory Information\r\n  \
+  5. Free All/Specific Allocated Memory\r\n  \
+  Press [ESC] to Exit.\r\n";
+
+CONST CHAR8 AllocatePageMemTop[] = "Now Process Allocatepages\r\nSupported Allocate Type :\r\n--------------------------------------\r\n  \
+  1. AllocateAnyPages\r\n  \
+  2. AllocateMaxAddress\r\n  \
+  3. AllocateAddress\r\n  \
+  Press choose one, [ESC] back to Upper Level.\r\n";
+
+CONST CHAR8 MainMenuMsgTop[] = "Utility List:\r\n1. PCI Utility\r\n2. BIOS Data Area Utility\r\n3. CMOS Utility\r\n4. Mem Utility\r\n[Esc] to Exit\r\n";
+
+CONST CHAR8 SelMemTypeNum[] = "1.EfiReservedMemoryType\r\n2.EfiLoaderCode\r\n3.EfiLoaderData\r\n4.EfiBootServicesCode\r\n5.EfiBootServicesData\r\n\
+6.EfiRuntimeServicesCode\r\n7.EfiRuntimeServicesData\r\n8.EfiConventionalMemory\r\n9.EfiUnusableMemory\r\n10.EfiACPIReclaimMemory\r\n\
+11.EfiACPIMemoryNVS\r\n12.EfiMemoryMappedIO\r\n"; //13.EfiMemoryMappedIOPortSpace\r\n14.EfiPalCode\r\n15.EfiPersistentMemory";
+#endif
+
+extern EFI_SYSTEM_TABLE *gST;
+extern EFI_BOOT_SERVICES *gBS;
+
+//-----------------------------------structure--------------------------------------------------
+// linked list for get memory map: add/remove features for allocatepool/page
+struct node
+{
+  EFI_MEMORY_DESCRIPTOR *MemMap;
+  struct node *next;
+};
+typedef struct node MemMapNode;
+
+struct pageNode
+{
+  EFI_ALLOCATE_TYPE PAType;
+  EFI_MEMORY_TYPE PAMemType;
+  UINTN PAPage;
+  EFI_PHYSICAL_ADDRESS PAPhyAddr;
+  struct pageNode *next;
+};
+typedef struct pageNode PApageNode;
+
+//--------------------------------Function Protype-----------------------------------------------
+// 0. print a prompt menu and select 1 to 13 to continue
+EFI_STATUS SelNum1to12Menu(IN CONST CHAR8 *, OUT UINT8 *);
+EFI_STATUS SelNum1to5Menu(IN CONST CHAR8 *, OUT UINT8 *);
+EFI_STATUS SelYorNMenu(IN CONST CHAR8 *, OUT UINT8 *);
+EFI_STATUS PressAnyKeyToContinue();
+
+EFI_STATUS MemMainProgram();
+EFI_STATUS AllocatePageMemory();
+EFI_STATUS AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel);
+
+EFI_STATUS Input2HexToUInt8(OUT UINT8 *OutputValue);
+EFI_STATUS Input2HexToUInt64(OUT UINT64 *OutputValue);
+EFI_STATUS Input8HexToUInt64(OUT UINT64 *OutputValue);
+
+//--------------------------------Functions Below Required Processing-----------------------------------------------
+
+//--------------------------------------PCI Utility---------------------------------------
+
+EFI_STATUS PrintSupportedMemType()
+{
+  Print(L"Now Process Allocatepages. (AllocateAnyPages)\r\n \
+  Supported Memory Type :\r\n  \
+  --------------------------------------\r\n");
+  for (UINT8 i = 1; i < 13; i++)
+  {
+    switch (i)
+    {
+    case EfiReservedMemoryType:
+      Print(L"EfiReservedMemoryType\n");
+      break;
+    case EfiLoaderCode:
+      Print(L"EfiLoaderCode\n");
+      break;
+    case EfiLoaderData:
+      Print(L"EfiLoaderData\n");
+      break;
+    case EfiBootServicesCode:
+      Print(L"EfiBootServicesCode\n");
+      break;
+    case EfiBootServicesData:
+      Print(L"EfiBootServicesData\n");
+      break;
+    case EfiRuntimeServicesCode:
+      Print(L"EfiRuntimeServicesCode\n");
+      break;
+    case EfiRuntimeServicesData:
+      Print(L"EfiRuntimeServicesData\n");
+      break;
+    case EfiConventionalMemory:
+      Print(L"EfiConventionalMemory\n");
+      break;
+    case EfiUnusableMemory:
+      Print(L"EfiUnusableMemory\n");
+      break;
+    case EfiACPIReclaimMemory:
+      Print(L"EfiACPIReclaimMemory\n");
+      break;
+    case EfiACPIMemoryNVS:
+      Print(L"EfiACPIMemoryNVS\n");
+      break;
+    case EfiMemoryMappedIO:
+      Print(L"EfiMemoryMappedIO\n");
+      break;
+    case EfiMemoryMappedIOPortSpace:
+      Print(L"EfiMemoryMappedIOPortSpace\n");
+      break;
+    case EfiPalCode:
+      Print(L"EfiPalCode\n");
+      break;
+    case EfiPersistentMemory:
+      Print(L"EfiPersistentMemory\n");
+      break;
+    default:
+      Print(L"i=%d\n", i);
+      break;
+    }
+  }
+  Print(L"Press choose one, [ESC] back to Upper Level.\r\n ");
+  return EFI_SUCCESS;
+}
+
+// memory type enum to string: return char*16
+CHAR16 *
+ConvertMemTypeToString(
+    IN CONST EFI_MEMORY_TYPE MemTypeEnum)
+{
+  CHAR16 *RetVal;
+  RetVal = NULL;
+  switch (MemTypeEnum)
+  {
+  case EfiReservedMemoryType:
+    StrnCatGrow(&RetVal, NULL, L"ReservedMem ", 12);
+    break;
+  case EfiLoaderCode:
+    StrnCatGrow(&RetVal, NULL, L"LoaderCode  ", 12);
+    break;
+  case EfiLoaderData:
+    StrnCatGrow(&RetVal, NULL, L"LoaderData  ", 12);
+    break;
+  case EfiBootServicesCode:
+    StrnCatGrow(&RetVal, NULL, L"BootSvcCode ", 12);
+    break;
+  case EfiBootServicesData:
+    StrnCatGrow(&RetVal, NULL, L"BootSvcData ", 12);
+    break;
+  case EfiRuntimeServicesCode:
+    StrnCatGrow(&RetVal, NULL, L"RtimeSvcCode", 12);
+    break;
+  case EfiRuntimeServicesData:
+    StrnCatGrow(&RetVal, NULL, L"RtimeSvcData", 12);
+    break;
+  case EfiConventionalMemory:
+    StrnCatGrow(&RetVal, NULL, L"Conventional", 12);
+    break;
+  case EfiUnusableMemory:
+    StrnCatGrow(&RetVal, NULL, L"Unusable    ", 12);
+    break;
+  case EfiACPIReclaimMemory:
+    StrnCatGrow(&RetVal, NULL, L"ACPIReclaim ", 12);
+    break;
+  case EfiACPIMemoryNVS:
+    StrnCatGrow(&RetVal, NULL, L"ACPIMemNVS  ", 12);
+    break;
+  case EfiMemoryMappedIO:
+    StrnCatGrow(&RetVal, NULL, L"MemMappedIO ", 12);
+    break;
+  case EfiMemoryMappedIOPortSpace:
+    StrnCatGrow(&RetVal, NULL, L"MemMapIOPS  ", 12);
+    break;
+  case EfiPalCode:
+    StrnCatGrow(&RetVal, NULL, L"PalCode     ", 12);
+    break;
+  case EfiPersistentMemory:
+    StrnCatGrow(&RetVal, NULL, L"Persistent  ", 12);
+    break;
+  default:
+    StrnCatGrow(&RetVal, NULL, L"%x\n", MemTypeEnum);
+  }
+  return (RetVal);
+}
+// ami get system memory map works but mine does not -> need to find out ???
+EFI_STATUS GetSystemMemoryMap(
+    OUT EFI_MEMORY_DESCRIPTOR **MemMap,
+    OUT UINTN *MemDescSize,
+    OUT UINTN *MemEntriesCount)
+{
+  EFI_STATUS Status;
+  UINTN MemMapSize, MemMapKey;
+  UINT32 MemDescVer;
+  *MemMap = NULL;
+
+  MemMapSize = 0; // GetMemoryMap will return the size needed for the map
+  Status = gBS->GetMemoryMap(&MemMapSize, *MemMap, &MemMapKey, MemDescSize, &MemDescVer);
+
+  if (Status != EFI_BUFFER_TOO_SMALL)
+  {
+    return Status;
+  }
+  MemMapSize += EFI_PAGE_SIZE; // PAGE SIZE = 4KB
+  Status = gBS->AllocatePool(EfiBootServicesData, MemMapSize, (VOID **)MemMap);
+  ASSERT_EFI_ERROR(Status);
+  Status = gBS->GetMemoryMap(&MemMapSize, *MemMap, &MemMapKey, MemDescSize, &MemDescVer);
+  ASSERT_EFI_ERROR(Status);
+  *MemEntriesCount = (UINT16)(MemMapSize / *MemDescSize);
+
+  return EFI_SUCCESS;
+}
+// convert memory type from enum to string; error will return NULL
+CHAR16 *
+ConvertMemoryType(
+    IN CONST EFI_MEMORY_TYPE Memory)
+{
+  CHAR16 *RetVal;
+  RetVal = NULL;
+
+  switch (Memory)
+  {
+  case EfiReservedMemoryType:
+    StrnCatGrow(&RetVal, NULL, L"EfiReservedMemoryType", 0);
+    break;
+  case EfiLoaderCode:
+    StrnCatGrow(&RetVal, NULL, L"EfiLoaderCode", 0);
+    break;
+  case EfiLoaderData:
+    StrnCatGrow(&RetVal, NULL, L"EfiLoaderData", 0);
+    break;
+  case EfiBootServicesCode:
+    StrnCatGrow(&RetVal, NULL, L"EfiBootServicesCode", 0);
+    break;
+  case EfiBootServicesData:
+    StrnCatGrow(&RetVal, NULL, L"EfiBootServicesData", 0);
+    break;
+  case EfiRuntimeServicesCode:
+    StrnCatGrow(&RetVal, NULL, L"EfiRuntimeServicesCode", 0);
+    break;
+  case EfiRuntimeServicesData:
+    StrnCatGrow(&RetVal, NULL, L"EfiRuntimeServicesData", 0);
+    break;
+  case EfiConventionalMemory:
+    StrnCatGrow(&RetVal, NULL, L"EfiConventionalMemory", 0);
+    break;
+  case EfiUnusableMemory:
+    StrnCatGrow(&RetVal, NULL, L"EfiUnusableMemory", 0);
+    break;
+  case EfiACPIReclaimMemory:
+    StrnCatGrow(&RetVal, NULL, L"EfiACPIReclaimMemory", 0);
+    break;
+  case EfiACPIMemoryNVS:
+    StrnCatGrow(&RetVal, NULL, L"EfiACPIMemoryNVS", 0);
+    break;
+  case EfiMemoryMappedIO:
+    StrnCatGrow(&RetVal, NULL, L"EfiMemoryMappedIO", 0);
+    break;
+  case EfiMemoryMappedIOPortSpace:
+    StrnCatGrow(&RetVal, NULL, L"EfiMemoryMappedIOPortSpace", 0);
+    break;
+  case EfiPalCode:
+    StrnCatGrow(&RetVal, NULL, L"EfiPalCode", 0);
+    break;
+  case EfiMaxMemoryType:
+    StrnCatGrow(&RetVal, NULL, L"EfiMaxMemoryType", 0);
+    break;
+  default:
+    //ASSERT(FALSE);
+    StrnCatGrow(&RetVal, NULL, L"NotEfiMemType", 0);
+    break;
+  }
+  return (RetVal);
+}
 //top bar display Bus Decvice Function Number
 EFI_STATUS
 PciAddrToBDF(
@@ -537,6 +827,9 @@ FunctionKey3(
   //Print(L"\nModifyOffset=%x ShiftOffset=%x", *ModifyOffset, ShiftOffset);
   return EFI_SUCCESS;
 }
+
+//--------------------------------------BIOS Data Area and CMOS---------------------------------------
+
 // Enable NMI
 EFI_STATUS
 CMOSEnableNMI()
@@ -830,71 +1123,6 @@ PciMainProgram()
   }
   return EFI_SUCCESS;
 }
-// not used
-EFI_STATUS
-PrintMainMenu()
-{
-  EFI_INPUT_KEY Key;
-  EFI_STATUS Status;
-  UINT8 row = 1;
-  gST->ConOut->ClearScreen(gST->ConOut);
-  Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n");
-  Print(L"\n [Esc] to Exit \n");
-  gST->ConOut->SetCursorPosition(gST->ConOut, 1, row); //set cursor default position
-  while (1)
-  {
-    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
-    if (Status == EFI_SUCCESS)                            //fail will back to while loop
-    {
-      if (SCAN_ESC == Key.ScanCode) //escape from top menu to terminal
-      {
-        gST->ConOut->ClearScreen(gST->ConOut);
-        break;
-      }
-      if ((SCAN_UP == Key.ScanCode) && (row - 1 > 0)) //move cursor on top menu - <Up>
-      {
-        row--;
-        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
-      }
-      if ((SCAN_DOWN == Key.ScanCode) && (row < 3)) //move cursor on top menu - <Down>
-      {
-        row++;
-        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
-      }
-      if (CHAR_CARRIAGE_RETURN == Key.UnicodeChar) //select pci device from top menu - <Enter>
-      {
-        switch (row)
-        {
-        case PciUtility:
-          PciMainProgram();
-          break;
-
-        case BDSUtility:
-          break;
-
-        case CMOSUtility:
-          break;
-        }
-        gST->ConOut->ClearScreen(gST->ConOut);
-        Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n");
-        Print(L"\n [Esc] to Exit \n");
-        gST->ConOut->SetCursorPosition(gST->ConOut, 1, row); //set cursor default position
-      }
-    }
-    gBS->Stall(15000);
-  }
-  return EFI_SUCCESS;
-}
-// prompt words on menu
-EFI_STATUS
-PromptMainMenu()
-{
-  gST->ConOut->ClearScreen(gST->ConOut);
-  Print(L" Utility List: \n 1. PCI Utility \n 2. BIOS Data Area Utility \n 3. CMOS Utility\n 4. Mem Utility\n");
-  Print(L"\n [Esc] to Exit \n");
-  gST->ConOut->SetCursorPosition(gST->ConOut, 1, 1); //set cursor default position
-  return EFI_SUCCESS;
-}
 // test
 EFI_STATUS
 TestPciRootBridgeIoProtocol()
@@ -1162,86 +1390,435 @@ CMOSMainProgram()
     gBS->Stall(500000);
     //gST->ConOut->ClearScreen(gST->ConOut);
   }
-  /*
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
-  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
-  Print(L"\n RegBValue=%x\n", RegBValue);
-  RegBValue = RegBValue | 0x80; // Disable NMI
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_INDEX_IO_PORT, 1, &RegB);
-  IoDev->Io.Write(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
-  IoDev->Io.Read(IoDev, EfiCpuIoWidthUint8, CMOS_DATA_IO_PORT, 1, &RegBValue);
-  Print(L"\n After Disable NMI RegBValue=%x\n", RegBValue);
-  
-  Print(L"BDA Memory Address:0x400 - 0x4FF\n");
-  PrintTableByMode(Data, 0);
-  Print(L"\nUse <F3> to Modify the Value");
-  Print(L"\nUse <Esc> to Quit");
-  while (Go)
-  {
-    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
-    if (Status == EFI_SUCCESS)                            //fail will back to while loop
-    {
-      switch (Key.ScanCode)
-      {
-      case SCAN_F3:
-        BDSF3(BDSAddress);
-        break;
-      case SCAN_ESC:
-        Go = FALSE;
-        break;
-      }
-    }
-    gBS->Stall(100000);
-  }
-
-  */
   return EFI_SUCCESS;
 }
 
-// Mem Main Program
+//--------------------------------------Memory Utility---------------------------------------
+
+// Insert Linked List - MemMapNode
 EFI_STATUS
-MemMainProgram()
+InsertMemMapNodeLL(
+    IN EFI_MEMORY_DESCRIPTOR *MemMap,
+    IN OUT MemMapNode *prev)
 {
   EFI_STATUS Status;
-  EFI_INPUT_KEY Key;
-
-  EFI_MEMORY_DESCRIPTOR MemMap;
-  UINTN MemMapSize, MapKey, DescriptorSize;
-  UINT32 DescriptorVer;
-  BOOLEAN Go = TRUE;
-
-  Status = gBS->GetMemoryMap(&MemMapSize, &MemMap, &MapKey, &DescriptorSize, &DescriptorVer);
-  if (EFI_ERROR(Status))
+  MemMapNode *curr = NULL;
+  // Create a memory space for curr
+  Status = gBS->AllocatePool(EfiBootServicesData, sizeof(MemMapNode), (VOID **)&curr);
+  if (Status == EFI_OUT_OF_RESOURCES)
   {
-    Print(L"GetMemoryMap fail.\r\n");
+    Print(L"Out of resource (9) %x.\r\n", Status);
     return Status;
   }
-  gST->ConOut->ClearScreen(gST->ConOut);
-  Print(L"MemMapSize=%d, MemMap=%x, MapKey=%x, DescriptorSize=%d, DescriptorVer=%x",
-        MemMapSize, MemMap, MapKey, DescriptorSize, DescriptorVer);
-  Print(L"MemMap.PhysicalStart=%x,MemMap.VirtualStart=%x,MemMap.Type=%x,MemMap.NumberOfPages=%x,MemMap.Attribute=%x \n",
-        MemMap.PhysicalStart, MemMap.VirtualStart, MemMap.Type, MemMap.NumberOfPages, MemMap.Attribute);
+  curr->MemMap = MemMap;
+  curr->next = NULL;
+  prev = curr;
+  return EFI_SUCCESS;
+}
 
+// Get Current Memory Allocation Map
+EFI_STATUS
+GetCurrentMemoryAllocationMap()
+{
+
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  EFI_MEMORY_DESCRIPTOR *MemMap;
+  EFI_MEMORY_DESCRIPTOR *mm;
+  BOOLEAN Go = TRUE;
+  CHAR16 *MemTypeString;
+  UINT64 TotalMemSize = 0;
+  UINTN MemDescSize;
+  UINT8 count = 0;
+  UINT8 i = 0;
+  UINTN MemEntriesCount;
+  UINT32 MemTypeVsPageArray[2][30];
+  //  Type    0       1     2       3       ...    29
+  //  Pages   76129   259   7062    43316   ...
+  for (i = 0; i < 30; i++)
+  {
+    MemTypeVsPageArray[0][i] = i;
+    MemTypeVsPageArray[1][i] = 0;
+  }
+
+  Status = GetSystemMemoryMap(&MemMap, &MemDescSize, &MemEntriesCount);
+  if (Status == EFI_SUCCESS) //fail will back to while loop
+  {
+//debug: trace each record
+#if 0
+    // print memory map:
+    for (mm = MemMap; count < MemEntriesCount; mm = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)mm + MemDescSize), count++)
+    {
+      //Print(L"This fake error is ion line %d\n", __LINE__);
+
+      Print(L"%02d: %016lx, %05x, ", count, mm->PhysicalStart, mm->NumberOfPages);
+      switch (mm->Type)
+      {
+      case EfiReservedMemoryType:
+        Print(L"EfiReservedMemoryType\n");
+        break;
+      case EfiLoaderCode:
+        Print(L"EfiLoaderCode\n");
+        break;
+      case EfiLoaderData:
+        Print(L"EfiLoaderData\n");
+        break;
+      case EfiBootServicesCode:
+        Print(L"EfiBootServicesCode\n");
+        break;
+      case EfiBootServicesData:
+        Print(L"EfiBootServicesData\n");
+        break;
+      case EfiRuntimeServicesCode:
+        Print(L"EfiRuntimeServicesCode\n");
+        break;
+      case EfiRuntimeServicesData:
+        Print(L"EfiRuntimeServicesData\n");
+        break;
+      case EfiConventionalMemory:
+        Print(L"EfiConventionalMemory\n");
+        break;
+      case EfiUnusableMemory:
+        Print(L"EfiUnusableMemory\n");
+        break;
+      case EfiACPIReclaimMemory:
+        Print(L"EfiACPIReclaimMemory\n");
+        break;
+      case EfiACPIMemoryNVS:
+        Print(L"EfiACPIMemoryNVS\n");
+        break;
+      case EfiMemoryMappedIO:
+        Print(L"EfiMemoryMappedIO\n");
+        break;
+      case EfiMemoryMappedIOPortSpace:
+        Print(L"EfiMemoryMappedIOPortSpace\n");
+        break;
+      case EfiPalCode:
+        Print(L"EfiPalCode\n");
+        break;
+      case EfiPersistentMemory:
+        Print(L"EfiPersistentMemory\n");
+        break;
+      default:
+        Print(L"%x\n", mm->Type);
+      }
+
+      Print(L"Press Any Key to Continue. Press [ESC] to Skip Print...\n");
+      BOOLEAN OneStep = TRUE;
+      EFI_INPUT_KEY Key;
+      while (OneStep)
+      {
+        Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+        if (Status == EFI_SUCCESS)                            //fail will back to while loop
+        {
+          switch (Key.ScanCode)
+          {
+          case SCAN_ESC:
+            OneStep = FALSE;    // exit while loop
+            return EFI_SUCCESS; // exit function
+            break;
+
+          default:
+            OneStep = FALSE; // exit while loop and continue
+            break;
+          }
+        }
+        gBS->Stall(10000);
+      }
+    }
+#endif
+  }
+
+  /*
+  EFI_STATUS Status;
+
+  UINTN MemMapSize = 0;
+  EFI_MEMORY_DESCRIPTOR *ArrayMemMap = NULL;
+  UINTN MapKey = 0;
+  UINTN DescriptorSize = 0;
+  UINT32 DescriptorVer = 0;
+
+  //Get Memory Map Size first
+  Status = gBS->GetMemoryMap(&MemMapSize, ArrayMemMap, &MapKey, &DescriptorSize, &DescriptorVer);
+  switch (Status)
+  {
+    //Expect EFI_BUFFER_TOO_SMALL to get mem map size
+  case EFI_BUFFER_TOO_SMALL:
+    //Print(L"MemMapSize=%d\r\n", MemMapSize);
+    break;
+  case EFI_INVALID_PARAMETER:
+    Print(L"EFI_INVALID_PARAMETER\r\n");
+    return Status;
+    break;
+  }
+  Print(L"This fake error is ion line %d\n", __LINE__);
+  //Allocate Returned Memory Map Size by GetMemoryMap()
+  //EFI_MEMORY_TYPE MemType = EfiBootServicesData;
+  MemMapSize += EFI_PAGE_SIZE; // PAGE SIZE = 4KB
+  Status = gBS->AllocatePool(EfiBootServicesData, MemMapSize, (VOID **)&ArrayMemMap);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"AllocatePool fail %x.\r\n", Status);
+    return Status;
+  }
+  Print(L"This fake error is ion line %d\n", __LINE__);
+  //Get Memory Map Info - ArrayMemMap
+  Status = gBS->GetMemoryMap(&MemMapSize, ArrayMemMap, &MapKey, &DescriptorSize, &DescriptorVer);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"GetMemoryMap fail %x.\r\n", Status);
+    return Status;
+  }
+*/
+
+  //Transfer array to linked list
+  MemMapNode *head = NULL; // head of linked list
+  MemMapNode *tail = NULL; // prev is before curr node
+  MemMapNode *curr = NULL; // curr node is the target for process
+  MemMapNode *temp = NULL; // temp node is the for printing elements
+  head = tail;
+  count = 0;
+
+  //for (UINT8 i = 0; i < MemEntriesCount; i++) the following needs to study
+  // create linked list
+  for (mm = MemMap; count < MemEntriesCount; mm = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)mm + MemDescSize), count++)
+  {
+    // Create a memory space for MemMapNode type
+    Status = gBS->AllocatePool(EfiBootServicesData, sizeof(MemMapNode), (VOID **)&curr);
+    if (Status == EFI_OUT_OF_RESOURCES)
+    {
+      Print(L"Out of resource (9) %x.\r\n", Status);
+      return Status;
+    }
+    // Set up data and ptr
+    curr->MemMap = mm;
+    curr->next = NULL;
+    tail->next = curr;
+    tail = curr;
+    if (count == 0) // set up head after tail is pointed to curr
+    {
+      head = tail; // head point is the first node of linked list
+    }
+  }
+
+  // display get memory map
+  temp = head;
+  count = 0;
+  gST->ConOut->ClearScreen(gST->ConOut);
+  Print(L"Type         Start            End              # Pages          Attributes\n");
+  while (temp->next != NULL)
+  {
+    // add up pages number by memory type
+    for (i = 0; i < 30; i++)
+    {
+      if (temp->MemMap->Type == i)
+      {
+        MemTypeVsPageArray[1][i] += temp->MemMap->NumberOfPages;
+        //Print(L"\n MemTypeVsPageArray[1][%d]=%d \n", i, MemTypeVsPageArray[1][i]);
+      }
+    }
+
+    // print Memory Type String
+    MemTypeString = ConvertMemTypeToString(temp->MemMap->Type);
+    if (EFI_ERROR(Status))
+    {
+      Print(L"PrintMemTypeToString fail %x.\r\n", Status);
+      return Status;
+    }
+    Print(L"%12s %016lx-%016lx %015lx %016lx\n", MemTypeString, temp->MemMap->PhysicalStart, temp->MemMap->PhysicalStart + (temp->MemMap->NumberOfPages * 4096) - 1, temp->MemMap->NumberOfPages, temp->MemMap->Attribute);
+    temp = temp->next;
+    count++; // used for display 24 items per page
+
+    if ((count % 22) == 21) //count the number of rows: 0 1 2 3 4 ... 23->read key stroke
+    {
+      Print(L"Press Any Key to Continue. Press [ESC] to Skip Print...");
+      while (Go)
+      {
+        Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+        if (Status == EFI_SUCCESS)                            //fail will back to while loop
+        {
+          switch (Key.ScanCode)
+          {
+          case SCAN_ESC:
+            Go = FALSE;         // exit while loop
+            return EFI_SUCCESS; // exit function
+            break;
+
+          default:
+            Go = FALSE; // exit while loop and continue
+            gST->ConOut->ClearScreen(gST->ConOut);
+            break;
+          }
+        }
+        gBS->Stall(10000);
+      }
+      Print(L"Type         Start            End              # Pages          Attributes\n");
+    }
+    Go = TRUE; // will come back next page
+  }
+
+  // work around
+  // missed end node because while loop does not process the last node
+  MemTypeString = ConvertMemTypeToString(temp->MemMap->Type);
+  if (EFI_ERROR(Status))
+  {
+    Print(L"PrintMemTypeToString fail %x.\r\n", Status);
+    return Status;
+  }
+  Print(L"%12s %016lx-%016lx %015lx %016lx\n", MemTypeString, temp->MemMap->PhysicalStart, temp->MemMap->PhysicalStart + (temp->MemMap->NumberOfPages * 4096) - 1, temp->MemMap->NumberOfPages, temp->MemMap->Attribute);
+  // add up pages number by memory type
+  for (i = 0; i < 30; i++)
+  {
+    if (temp->MemMap->Type == i)
+    {
+      MemTypeVsPageArray[1][i] += temp->MemMap->NumberOfPages;
+    }
+  }
+
+  // display summary
+  Print(L"\r\n");
+  for (i = 0; i < 30; i++)
+  {
+    if (MemTypeVsPageArray[1][i] >= 1)
+    {
+      MemTypeString = ConvertMemTypeToString(MemTypeVsPageArray[0][i]);
+      if (EFI_ERROR(Status))
+      {
+        Print(L"PrintMemTypeToString fail %x.\r\n", Status);
+        return Status;
+      }
+      Print(L"%12s : %d Pages (%d) \n", MemTypeString, MemTypeVsPageArray[1][i], MemTypeVsPageArray[1][i] * 4096);
+    }
+    TotalMemSize += MemTypeVsPageArray[1][i];
+  }
+  Print(L"Total Memory: %d Pages (%d) \n", TotalMemSize, TotalMemSize * 4096);
+  Print(L"Press Any Key to Continue........");
+
+  // stop and press to exit
+  Go = TRUE;
   while (Go)
   {
     Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
     if (Status == EFI_SUCCESS)                            //fail will back to while loop
     {
-      switch (Key.ScanCode)
+      Go = FALSE;
+      gST->ConOut->ClearScreen(gST->ConOut);
+    }
+    gBS->Stall(1000);
+  }
+
+  return EFI_SUCCESS;
+}
+
+// called by AllocatePageByMemType
+EFI_STATUS
+AllocateWantedPages()
+{
+  EFI_INPUT_KEY Key;
+  EFI_STATUS Status;
+  BOOLEAN Go = TRUE;
+  UINTN AllocatedPageNumbers = 0;
+  //UINT64 *AllocatedPageNumbers64 = 0;
+  EFI_PHYSICAL_ADDRESS AllocatedAddress = 0;
+  CHAR16 *PromptInputString = NULL;
+  StrnCatGrow(&PromptInputString, NULL, L"Input Value", 11);
+
+  Print(L"\r\nHow many pages do you want to allocate :");
+  // input number
+  //Status = Input2HexToUInt8(PromptInputString, AllocatedPageNumbers64);
+
+  // allocate page here
+  // AllocateAnyPages EfiReservedMemoryType AllocatedPages AllocatedAddress
+
+  Print(L"Allocate %d Pages at address %016lx", AllocatedPageNumbers, AllocatedAddress);
+  // display 00: 00 00 00 00 00 00 00-00 00 00 00 00 00 *.................*
+  Print(L"Do you want to fill memory with value ? (y/n) :");
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key);
+    if (Status == EFI_SUCCESS)
+    {
+      //Print(L"\r\nKey.UnicodeChar=%x", Key.UnicodeChar);
+      switch (Key.UnicodeChar)
       {
-      case SCAN_ESC:
-        Go = FALSE;
+      case 0x0079: // y
+        Print(L"Input Value : 0x");
+        // input number
+        // copy number to memory
+        // press any key to continue ----back to main menu
+        break;
+      case 0x006E: // n
+                   // press any key to continue ----back to main menu
+        break;
+      }
+    }
+  }
+  return EFI_SUCCESS;
+}
+
+// called by AllocatePageMemoryAnyPages
+EFI_STATUS
+AllocatePageByMemType(
+    IN UINT8 ByMemType)
+{
+  EFI_INPUT_KEY Key;
+  EFI_STATUS Status;
+  BOOLEAN Go = TRUE;
+  CHAR16 *MemTypeString;
+
+  MemTypeString = ConvertMemTypeToString(ByMemType);
+  Print(L"Now Process Allocatepages. (AllocateAnyPages) (%s)\r\n \
+  Do you want to allocate Pages for all available Memory ? (y/n) :\r\n  \
+  --------------------------------------------------------------\r\n",
+        MemTypeString);
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key);
+    if (Status == EFI_SUCCESS)
+    {
+      Print(L"\r\nKey.UnicodeChar=%x", Key.UnicodeChar);
+      switch (Key.UnicodeChar)
+      {
+      case 0x0079: // y
+
+        break;
+      case 0x006E: // n
+        AllocateWantedPages();
+        /*
+        Status = AllocateWantedPages();
+        if (Status == EFI_SUCCESS)
+        {
+          Print(L"------EFI_SUCCESS------");
+        }
+        else
+        {
+          Print(L"------EFI_ERROR------");
+        }
+        */
         break;
 
       default:
+        if (Key.ScanCode == SCAN_ESC)
+        {
+          Go = FALSE;
+        }
         break;
       }
     }
-    gBS->Stall(500000);
+    gBS->Stall(10000);
   }
+  return EFI_SUCCESS;
+}
+
+// Allocate Pool Memory
+EFI_STATUS
+AllocatePoolMemory()
+{
 
   return EFI_SUCCESS;
 }
+
+//------------------------------Main Funciton-------------------------------------------
 /**
   as the real entry point for the application.
   @param[in] ImageHandle    The firmware allocated handle for the EFI image.
@@ -1255,58 +1832,587 @@ UefiMain(
     IN EFI_HANDLE ImageHandle,
     IN EFI_SYSTEM_TABLE *SystemTable)
 {
-  EFI_INPUT_KEY Key;
-  EFI_STATUS Status;
-  UINT8 row = 1;
+  UINT8 retSelection = 0;
   BOOLEAN Go = TRUE;
+  gST->ConOut->ClearScreen(gST->ConOut);
 
-  PromptMainMenu();
+  SelNum1to5Menu(MainMenuMsgTop, &retSelection);
+  while (Go)
+  {
+    switch (retSelection)
+    {
+    case 1:
+      PciMainProgram();
+      SelNum1to5Menu(MainMenuMsgTop, &retSelection);
+      break;
+    case 2:
+      BDAMainProgram();
+      SelNum1to5Menu(MainMenuMsgTop, &retSelection);
+      break;
+    case 3:
+      CMOSMainProgram();
+      SelNum1to5Menu(MainMenuMsgTop, &retSelection);
+      break;
+    case 4:
+      MemMainProgram();
+      SelNum1to5Menu(MainMenuMsgTop, &retSelection);
+      break;
+    case 0:
+      gST->ConOut->ClearScreen(gST->ConOut);
+      Go = FALSE; // Exit while(Go) loop
+      break;
+    }
+  }
+  return EFI_SUCCESS;
+}
+
+//--------------------------------Function implement-----------------------------------------------
+
+EFI_STATUS SelNum1to12Menu(IN CONST CHAR8 *promptString, OUT UINT8 *retSelNum)
+{
+  AsciiPrint("%a", promptString);
+  Input2HexToUInt8(retSelNum);
+  //Print(L"\r\n retSelNum=%d", *retSelNum);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS SelNum1to5Menu(IN CONST CHAR8 *promptString, OUT UINT8 *retSelNum)
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  BOOLEAN Go = TRUE;
+  gST->ConOut->ClearScreen(gST->ConOut);
+
+  AsciiPrint("%a", promptString);
   while (Go)
   {
     Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
     if (Status == EFI_SUCCESS)                            //fail will back to while loop
     {
-      switch (Key.ScanCode)
+      switch (Key.UnicodeChar)
       {
-      case SCAN_ESC:
-        gST->ConOut->ClearScreen(gST->ConOut);
-        Go = FALSE; // Exit while(Go) loop
+      case CHAR_UNICODE_1:
+        *retSelNum = 1;
+        Go = FALSE;
         break;
-      case SCAN_UP:
-        if (row - 1 > 0)
-        {
-          row--;
-          gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
-        }
+      case CHAR_UNICODE_2:
+        *retSelNum = 2;
+        Go = FALSE;
         break;
-      case SCAN_DOWN:
-        if (row < 4)
-        {
-          row++;
-          gST->ConOut->SetCursorPosition(gST->ConOut, 1, row);
-        }
+      case CHAR_UNICODE_3:
+        *retSelNum = 3;
+        Go = FALSE;
         break;
-      default: //instead of case CHAR_CARRIAGE_RETURN because it is NOT ScanCode but UnicodeChar
-        switch (row)
+      case CHAR_UNICODE_4:
+        *retSelNum = 4;
+        Go = FALSE;
+        break;
+      case CHAR_UNICODE_5:
+        *retSelNum = 5;
+        Go = FALSE;
+        break;
+      default:
+        if (Key.ScanCode == SCAN_ESC)
         {
-        case PciUtility:
-          PciMainProgram();
-          break;
-        case BDSUtility:
-          BDAMainProgram();
-          break;
-        case CMOSUtility:
-          CMOSMainProgram();
-          break;
-        case MemUtility:
-          MemMainProgram();
-          break;
+          *retSelNum = 0;
+          Go = FALSE;
         }
-        PromptMainMenu();
         break;
       }
     }
     gBS->Stall(10000);
   }
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS SelYorNMenu(IN CONST CHAR8 *promptString, OUT UINT8 *retSelNum)
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  BOOLEAN Go = TRUE;
+
+  AsciiPrint("%a", promptString);
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
+    {
+      switch (Key.UnicodeChar)
+      {
+      case 0x0079: // y is 1
+        *retSelNum = 1;
+        Go = FALSE;
+        break;
+      case 0x006E: // n is 0
+        *retSelNum = 0;
+        Go = FALSE;
+        break;
+      }
+    }
+    gBS->Stall(10000);
+  }
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS Input2HexToUInt8(OUT UINT8 *OutputValue)
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  BOOLEAN InputCheck = FALSE;
+  UINT8 ValueCount = 0;
+  CHAR16 ValueArr[8] = {0};
+
+  Print(L"\r\nInput Value: ");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (ValueCount < 2))
+      {
+        ValueArr[ValueCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", ValueArr[ValueCount]);
+        ValueCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (ValueCount > 0))
+      {
+        //Print(L"\n ValueArr=%c %c", ValueArr[0], ValueArr[1]);
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (ValueCount > 0) && (ValueCount <= 2))
+      {
+        ValueCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  //Status = ShellConvertStringToUint64(ValueArr, OutputValue, TRUE, TRUE);
+  *OutputValue = StrDecimalToUintn(ValueArr);
+  //Print(L"\r\n----OutputValue=%d", *OutputValue);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS Input2HexToUInt64(OUT UINT64 *OutputValue)
+{
+
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  BOOLEAN InputCheck = FALSE;
+  UINT8 ValueCount = 0;
+  CHAR16 ValueArr[8] = {0};
+
+  Print(L"\r\nInput Value: 0x");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (ValueCount < 2))
+      {
+        ValueArr[ValueCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", ValueArr[ValueCount]);
+        ValueCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (ValueCount == 2))
+      {
+        //Print(L"\n ValueArr=%c %c", ValueArr[0], ValueArr[1]);
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (ValueCount > 0) && (ValueCount <= 2))
+      {
+        ValueCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  Status = ShellConvertStringToUint64(ValueArr, OutputValue, TRUE, TRUE);
+  //*OutputValue = StrDecimalToUintn(ValueArr);
+  //Print(L"\r\n----OutputValue=%d", *OutputValue);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS Input8HexToUInt64(OUT UINT64 *OutputValue)
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  BOOLEAN InputCheck = FALSE;
+  UINT8 ValueCount = 0;
+  CHAR16 ValueArr[8] = {0};
+
+  Print(L"\r\nInput Value: ");
+  while (1)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (EFI_SUCCESS == Status)
+    {
+      //Print(L"\n\r Scancode [0x%4x],   UnicodeChar [%4x] \n\r", Key.ScanCode, Key.UnicodeChar);
+      InputCheck = ShellIsHexaDecimalDigitCharacter(Key.UnicodeChar);
+      if ((InputCheck) && (ValueCount < 8))
+      {
+        ValueArr[ValueCount] = (Key.UnicodeChar & 0x00ff);
+        Print(L"%c", ValueArr[ValueCount]);
+        ValueCount++;
+      }
+      if ((CHAR_CARRIAGE_RETURN == Key.UnicodeChar) && (ValueCount > 0))
+      {
+        //Print(L"\n ValueArr=%c %c", ValueArr[0], ValueArr[1]);
+        break;
+      }
+      if ((CHAR_BACKSPACE == Key.UnicodeChar) && (ValueCount > 0) && (ValueCount < 8))
+      {
+        ValueCount--;
+        Print(L"\b");
+        Print(L" ");
+        Print(L"\b");
+      }
+    }
+    gBS->Stall(15000);
+  }
+  //Status = ShellConvertStringToUint64(ValueArr, OutputValue, TRUE, TRUE);
+  *OutputValue = StrDecimalToUintn(ValueArr);
+  //Print(L"\r\n----OutputValue=%d", *OutputValue);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS PressAnyKeyToContinue()
+{
+  EFI_STATUS Status;
+  EFI_INPUT_KEY Key;
+  BOOLEAN Go = TRUE;
+
+  Print(L"\r\nPress Any Key To Continue....");
+  while (Go)
+  {
+    Status = gST->ConIn->ReadKeyStroke(gST->ConIn, &Key); //read key from keyboard
+    if (Status == EFI_SUCCESS)                            //fail will back to while loop
+    {
+      switch (Key.UnicodeChar)
+      {
+      default:
+        Go = FALSE;
+        break;
+      }
+    }
+    gBS->Stall(10000);
+  }
+  return EFI_SUCCESS;
+}
+
+// 2. Memory Utility Main Program
+EFI_STATUS MemMainProgram()
+{
+  UINT8 retSelection = 0;
+  BOOLEAN Go = TRUE;
+  gST->ConOut->ClearScreen(gST->ConOut);
+
+  SelNum1to5Menu(MemUtiMsgTop, &retSelection);
+  //Print(L"---retSelection=%d----", retSelection);
+  //gBS->Stall(100000000);
+  while (Go)
+  {
+    switch (retSelection)
+    {
+    case 1:
+      GetCurrentMemoryAllocationMap();
+      SelNum1to5Menu(MemUtiMsgTop, &retSelection);
+      break;
+    case 2:
+      AllocatePageMemory();
+      SelNum1to5Menu(MemUtiMsgTop, &retSelection);
+      break;
+    case 3:
+      //AllocatePoolMemory();
+      SelNum1to5Menu(MemUtiMsgTop, &retSelection);
+      break;
+    case 4:
+      //ShowAllocatedMemory();
+      SelNum1to5Menu(MemUtiMsgTop, &retSelection);
+      break;
+    case 5:
+      //FreeAllocatedMemory();
+      SelNum1to5Menu(MemUtiMsgTop, &retSelection);
+      break;
+    case 0:
+      Go = FALSE;
+      break;
+    }
+  }
+  return EFI_SUCCESS;
+}
+
+// 3. called by MemMainProgram
+EFI_STATUS
+AllocatePageMemory()
+{
+  UINT8 retSelection = 0;
+  BOOLEAN Go = TRUE;
+  EFI_ALLOCATE_TYPE allocateTypeSel;
+
+  while (Go)
+  {
+    gST->ConOut->ClearScreen(gST->ConOut);
+    SelNum1to5Menu(AllocatePageMemTop, &retSelection);
+    allocateTypeSel = retSelection - 1; // enum start from 0, so after select number need to minus 1
+    switch (retSelection)
+    {
+    case 1: // AllocateAnyPages
+      AllocatePageMemoryAnyPages(allocateTypeSel);
+      break;
+    case 2: // AllocateMaxAddress
+      //AllocateMaxAddress();
+      SelNum1to5Menu(AllocatePageMemTop, &retSelection);
+      break;
+    case 3: // AllocateAddress
+      //AllocateAddress();
+      SelNum1to5Menu(AllocatePageMemTop, &retSelection);
+      break;
+    case 0:
+      Go = FALSE;
+      break;
+    }
+  }
+  return EFI_SUCCESS;
+}
+
+// 4. called by AllocatePageMemory
+EFI_STATUS
+AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel)
+{
+  EFI_PHYSICAL_ADDRESS allocatePagesRetPhyAddr;
+  EFI_STATUS Status;
+  EFI_MEMORY_TYPE allocateMemTypeSel;
+  CHAR16 *allocateMemTypeSelToString = NULL;
+  UINT8 retSelNum = 0;
+  UINT8 retYorN = 0;
+  UINT64 SetValue = 0;
+  UINT64 allocatePagesSel = 0;
+  UINT64 allocatePagesSelBytes = 0;
+  UINT64 count = 0;
+  UINT8 *ptr = NULL;
+  BOOLEAN Go = TRUE;
+  //Transfer array to linked list
+  PApageNode *head = NULL; // head of linked list
+  PApageNode *tail = NULL; // prev is before curr node
+  PApageNode *curr = NULL; // curr node is the target for process
+  PApageNode *temp = NULL; // temp node is the for printing elements
+  head = tail;
+
+  gST->ConOut->ClearScreen(gST->ConOut);
+
+  // print supported memory type
+  Print(L"Now Process Allocatepages ( AllocateAnyPages )\r\nSupported Memory Type :\r\n\
+  ---------------------------------------------------\r\n");
+  // print and select memory type from menu
+  SelNum1to12Menu(SelMemTypeNum, &retSelNum);
+  gST->ConOut->ClearScreen(gST->ConOut);
+
+  // number -> memory type string
+  allocateMemTypeSel = retSelNum - 1;
+  //Print(L"\r\n allocateMemType=%d", allocateMemTypeSel);
+  allocateMemTypeSelToString = ConvertMemoryType(allocateMemTypeSel);
+  Print(L"\r\nNow Process Allocatepages ( AllocateAnyPages ) ( %s )\r\nDo you want to allocate Pages for all available Memory ? (y/n) :", allocateMemTypeSelToString);
+  SelYorNMenu("", &retYorN);
+  // y or n to allocate all memory
+  switch (retYorN)
+  {
+    // y start from 4KiB -> 2KiB -> 1Kib -> 512B -> 256B -> 128B ... -> 4
+  case 1:                    // all memory
+    allocatePagesSel = 4096; // faster this process when running
+    count = 0;
+    while (Go)
+    {
+      Status = gBS->AllocatePages(allocateTypeSel, allocateMemTypeSel, allocatePagesSel, &allocatePagesRetPhyAddr);
+      if (Status == EFI_SUCCESS)
+      {
+        // Create a memory space for new allocated page: EfiBootServicesData why??
+        Status = gBS->AllocatePool(EfiBootServicesData, sizeof(PApageNode), (VOID **)&curr);
+        if (Status == EFI_OUT_OF_RESOURCES)
+        {
+          Print(L"AllocatePool is Out of resource (9) %x.\r\n", Status);
+          return Status;
+        }
+        // Set up data and ptr
+        curr->PAType = allocateTypeSel;
+        curr->PAMemType = allocateMemTypeSel;
+        curr->PAPage = allocatePagesSel;
+        curr->PAPhyAddr = allocatePagesRetPhyAddr;
+        curr->next = NULL;
+        tail->next = curr;
+        tail = curr;
+
+        if (count == 0) // set up head after tail is pointed to curr
+        {
+          head = tail; // head point is the first node of linked list
+        }
+
+        Print(L"\r\n%d Allocate %d Pages at address %016lx OK!", count, allocatePagesSel, allocatePagesRetPhyAddr);
+        count++;
+      }
+      else if (Status == EFI_OUT_OF_RESOURCES)
+      {
+        //Print(L"\r\nEFI_OUT_OF_RESOURCES=%x", Status);
+        Print(L"\r\nAllocate %d Pages Failed!! Try to Allocate %d Pages!", allocatePagesSel, allocatePagesSel / 2);
+        allocatePagesSel = allocatePagesSel / 2;
+        PressAnyKeyToContinue();
+        if (allocatePagesSel == 4)
+        {
+          Print(L"\r\nAllocate %d Pages Failed!!", allocatePagesSel);
+          Print(L"\r\nBack to previous menu!!");
+          PressAnyKeyToContinue();
+          Go = FALSE; // back to AllocatePageMemory
+        }
+      }
+      else if (Status == EFI_INVALID_PARAMETER)
+      {
+        Print(L"\r\nEFI_INVALID_PARAMETER=%x", Status);
+        PressAnyKeyToContinue();
+        Go = FALSE;
+      }
+      else if (Status == EFI_NOT_FOUND)
+      {
+        Print(L"\r\nEFI_NOT_FOUND=%x", Status);
+        PressAnyKeyToContinue();
+        Go = FALSE;
+      }
+      else
+      {
+        Print(L"\r\nUnknown Status=%x", Status);
+        PressAnyKeyToContinue();
+        Go = FALSE;
+      }
+    }
+    break;
+  // n
+  case 0: // customize pages
+    Print(L"\r\nHow many pages do you want to allocate : ");
+    Input8HexToUInt64(&allocatePagesSel);
+    //allocatePagesSel += SIZE_4KB;
+
+    Status = gBS->AllocatePages(allocateTypeSel, allocateMemTypeSel, allocatePagesSel, &allocatePagesRetPhyAddr);
+    if (Status == EFI_SUCCESS)
+    {
+      Print(L"\r\nAllocate %d Pages at address %016lx", allocatePagesSel, allocatePagesRetPhyAddr);
+    }
+    else
+    {
+      Print(L"\r\n%S Allocate %016lx Pages Error!!", allocatePagesRetPhyAddr);
+    }
+    //  1 page = 4KiB = 4096 bytes
+    allocatePagesSelBytes = allocatePagesSel * 4096;
+
+    // set memory value to 0
+    gBS->SetMem((VOID *)allocatePagesRetPhyAddr, (UINTN)allocatePagesSelBytes, (UINT8)0);
+// show memory value
+#if 1
+    ptr = (UINT8 *)allocatePagesRetPhyAddr;
+
+    for (UINT8 i = 0; i < 64; i++)
+    {
+      if (i % 16 == 0)
+      {
+        Print(L"\r\n%02x:", i);
+      }
+      else if (i % 16 == 7)
+      {
+        Print(L" -");
+      }
+      else if (i % 16 == 15)
+      {
+        Print(L" %02x *................*", *ptr);
+        ptr++;
+      }
+      else
+      {
+        Print(L" %02x", *ptr);
+        ptr++;
+      }
+    }
+#endif
+
+    Print(L"\r\nDo you want to fill memory with value ?(y/n) :");
+    Status = SelYorNMenu("", &retYorN);
+    if (Status == EFI_SUCCESS)
+    {
+      //Print(L"\r\nPass");
+    }
+    else
+    {
+      Print(L"\r\n%S Error Code = %x !", __FUNCTION__, Status);
+    }
+    // fill value in memory
+    switch (retYorN)
+    {
+    case 1: // y -> fill in value
+      Input2HexToUInt64(&SetValue);
+      //Print(L"SetValue=%02x", SetValue);
+      //Print(L"\r\nallocatePagesSelBytes=%x", &allocatePagesRetPhyAddr);
+      //Print(L"\r\nallocatePagesSelBytes=%x", allocatePagesRetPhyAddr);
+
+      gBS->SetMem((VOID *)allocatePagesRetPhyAddr, (UINTN)allocatePagesSelBytes, (UINT8)SetValue);
+// show memory value
+#if 1
+      ptr = (UINT8 *)allocatePagesRetPhyAddr;
+
+      for (UINT8 i = 0; i < 64; i++)
+      {
+        if (i % 16 == 0)
+        {
+          Print(L"\r\n%02x:", i);
+        }
+        else if (i % 16 == 7)
+        {
+          Print(L" -");
+        }
+        else if (i % 16 == 15)
+        {
+          Print(L" %02x *................*", *ptr);
+          ptr++;
+        }
+        else
+        {
+          Print(L" %02x", *ptr);
+          ptr++;
+        }
+      }
+#endif
+
+      break;
+    case 0: // n -> ignore
+      break;
+    }
+    PressAnyKeyToContinue();
+    break;
+  }
+  temp = head;
+  count = 0;
+  while (temp->next != NULL)
+  {
+    Status = gBS->FreePages(temp->PAPhyAddr, temp->PAPage);
+    if (Status != EFI_SUCCESS)
+    {
+      Print(L"\r\nFree Pages Failed!! %x", Status);
+    }
+    Print(L"\r\n %d Free Physical Addr= %016lx   Pages=%d", count, temp->PAPhyAddr, temp->PAPage);
+    temp = temp->next;
+    count++;
+  }
+  Status = gBS->FreePages(temp->PAPhyAddr, temp->PAPage);
+  if (Status != EFI_SUCCESS)
+  {
+    Print(L"\r\nFree Pages Failed!! %x", Status);
+  }
+  Print(L"\r\n %d Free Physical Addr= %016lx   Pages=%d", count, temp->PAPhyAddr, temp->PAPage);
+  PressAnyKeyToContinue();
+
   return EFI_SUCCESS;
 }
