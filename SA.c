@@ -56,15 +56,15 @@
 CONST CHAR8 MemUtiMsgTop[] = "Max T. Memory Utility\r\nWhat you want ?\r\n  \
   1. Get Current Memory Allocation Map\r\n  \
   2. AllocatePages ().\r\n  \
-  3. AllocatePool ().\r\n  \
-  4. Show Allocated Memory Information\r\n  \
-  5. Free All/Specific Allocated Memory\r\n  \
+  3. AllocatePool (). ---Not Ready Yet---\r\n  \
+  4. Show Allocated Memory Information ---Not Ready Yet---\r\n  \
+  5. Free All/Specific Allocated Memory ---Not Ready Yet---\r\n  \
   Press [ESC] to Exit.\r\n";
 
 CONST CHAR8 AllocatePageMemTop[] = "Now Process Allocatepages\r\nSupported Allocate Type :\r\n--------------------------------------\r\n  \
   1. AllocateAnyPages\r\n  \
-  2. AllocateMaxAddress\r\n  \
-  3. AllocateAddress\r\n  \
+  2. AllocateMaxAddress ---Not Ready Yet---\r\n  \
+  3. AllocateAddress ---Not Ready Yet---\r\n  \
   Press choose one, [ESC] back to Upper Level.\r\n";
 
 CONST CHAR8 MainMenuMsgTop[] = "Utility List:\r\n1. PCI Utility\r\n2. BIOS Data Area Utility\r\n3. CMOS Utility\r\n4. Mem Utility\r\n[Esc] to Exit\r\n";
@@ -113,8 +113,19 @@ EFI_STATUS Input8HexToUInt64(OUT UINT64 *OutputValue);
 
 //--------------------------------Functions Below Required Processing-----------------------------------------------
 
-//--------------------------------------PCI Utility---------------------------------------
-
+//--------------------------------------To be deleted-----------------------------------------------------------------
+// DWord 4 bytes x64 to Word 2 bytes x128
+EFI_STATUS TransferDWordToWordTable(
+    IN UINT32 *PciTable,
+    OUT UINT16 *WordTable)
+{
+  for (UINT16 j = 0; j < 128; j++)
+  {
+    WordTable[2 * j] = (PciTable[j] & 0xffff0000);
+    WordTable[2 * j + 1] = (PciTable[j] & 0x0000ffff) >> 16;
+  }
+  return EFI_SUCCESS;
+}
 EFI_STATUS PrintSupportedMemType()
 {
   Print(L"Now Process Allocatepages. (AllocateAnyPages)\r\n \
@@ -177,6 +188,8 @@ EFI_STATUS PrintSupportedMemType()
   Print(L"Press choose one, [ESC] back to Upper Level.\r\n ");
   return EFI_SUCCESS;
 }
+
+//--------------------------------------PCI Utility-----------------------------------------------------------------
 
 // memory type enum to string: return char*16
 CHAR16 *
@@ -430,19 +443,6 @@ PortIoRead32(
     IoWrite32(PCI_INDEX_IO_PORT, PciAddr);
     PciTable[i] = IoRead32(PCI_DATA_IO_PORT);
     PciAddr += 0x04;
-  }
-  return EFI_SUCCESS;
-}
-// DWord 4 bytes x64 to Word 2 bytes x128
-EFI_STATUS
-TransferDWordToWordTable(
-    IN UINT32 *PciTable,
-    OUT UINT16 *WordTable)
-{
-  for (UINT16 j = 0; j < 128; j++)
-  {
-    WordTable[2 * j] = (PciTable[j] & 0xffff0000);
-    WordTable[2 * j + 1] = (PciTable[j] & 0x0000ffff) >> 16;
   }
   return EFI_SUCCESS;
 }
@@ -2108,7 +2108,7 @@ EFI_STATUS PressAnyKeyToContinue()
   return EFI_SUCCESS;
 }
 
-// 2. Memory Utility Main Program
+// Memory Utility Main Program
 EFI_STATUS MemMainProgram()
 {
   UINT8 retSelection = 0;
@@ -2130,15 +2130,15 @@ EFI_STATUS MemMainProgram()
       AllocatePageMemory();
       SelNum1to5Menu(MemUtiMsgTop, &retSelection);
       break;
-    case 3:
+    case 3: // Not Ready Yet
       //AllocatePoolMemory();
       SelNum1to5Menu(MemUtiMsgTop, &retSelection);
       break;
-    case 4:
+    case 4: // Not Ready Yet
       //ShowAllocatedMemory();
       SelNum1to5Menu(MemUtiMsgTop, &retSelection);
       break;
-    case 5:
+    case 5: // Not Ready Yet
       //FreeAllocatedMemory();
       SelNum1to5Menu(MemUtiMsgTop, &retSelection);
       break;
@@ -2150,7 +2150,7 @@ EFI_STATUS MemMainProgram()
   return EFI_SUCCESS;
 }
 
-// 3. called by MemMainProgram
+// called by MemMainProgram
 EFI_STATUS
 AllocatePageMemory()
 {
@@ -2184,7 +2184,7 @@ AllocatePageMemory()
   return EFI_SUCCESS;
 }
 
-// 4. called by AllocatePageMemory
+// called by AllocatePageMemory
 EFI_STATUS
 AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel)
 {
@@ -2194,12 +2194,13 @@ AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel)
   CHAR16 *allocateMemTypeSelToString = NULL;
   UINT8 retSelNum = 0;
   UINT8 retYorN = 0;
-  UINT64 SetValue = 0;
+  //UINT64 SetValue = 0;
   UINT64 allocatePagesSel = 0;
-  UINT64 allocatePagesSelBytes = 0;
+  //UINT64 allocatePagesSelBytes = 0;
   UINT64 count = 0;
-  UINT8 *ptr = NULL;
+  //UINT8 *ptr = NULL;
   BOOLEAN Go = TRUE;
+  BOOLEAN NotImplementCustomizeAllocatedPages = TRUE;
   //Transfer array to linked list
   PApageNode *head = NULL; // head of linked list
   PApageNode *tail = NULL; // prev is before curr node
@@ -2294,6 +2295,10 @@ AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel)
     break;
   // n
   case 0: // customize pages
+    Print(L"\r\nNot Ready Yet! ");
+
+//--------------------------to be implemented-------------------------------------------
+#if 0
     Print(L"\r\nHow many pages do you want to allocate : ");
     Input8HexToUInt64(&allocatePagesSel);
     //allocatePagesSel += SIZE_4KB;
@@ -2307,13 +2312,60 @@ AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel)
     {
       Print(L"\r\n%S Allocate %016lx Pages Error!!", allocatePagesRetPhyAddr);
     }
-    //  1 page = 4KiB = 4096 bytes
-    allocatePagesSelBytes = allocatePagesSel * 4096;
 
-    // set memory value to 0
-    gBS->SetMem((VOID *)allocatePagesRetPhyAddr, (UINTN)allocatePagesSelBytes, (UINT8)0);
-// show memory value
-#if 1
+
+
+  //  1 page = 4KiB = 4096 bytes
+  allocatePagesSelBytes = allocatePagesSel * 4096;
+
+  // set memory value to 0
+  gBS->SetMem((VOID *)allocatePagesRetPhyAddr, (UINTN)allocatePagesSelBytes, (UINT8)0);
+  // show memory value
+  ptr = (UINT8 *)allocatePagesRetPhyAddr;
+
+  for (UINT8 i = 0; i < 64; i++)
+  {
+    if (i % 16 == 0)
+    {
+      Print(L"\r\n%02x:", i);
+    }
+    else if (i % 16 == 7)
+    {
+      Print(L" -");
+    }
+    else if (i % 16 == 15)
+    {
+      Print(L" %02x *................*", *ptr);
+      ptr++;
+    }
+    else
+    {
+      Print(L" %02x", *ptr);
+      ptr++;
+    }
+  }
+
+  Print(L"\r\nDo you want to fill memory with value ?(y/n) :");
+  Status = SelYorNMenu("", &retYorN);
+  if (Status == EFI_SUCCESS)
+  {
+    //Print(L"\r\nPass");
+  }
+  else
+  {
+    Print(L"\r\n%S Error Code = %x !", __FUNCTION__, Status);
+  }
+  // fill value in memory
+  switch (retYorN)
+  {
+  case 1: // y -> fill in value
+    Input2HexToUInt64(&SetValue);
+    //Print(L"SetValue=%02x", SetValue);
+    //Print(L"\r\nallocatePagesSelBytes=%x", &allocatePagesRetPhyAddr);
+    //Print(L"\r\nallocatePagesSelBytes=%x", allocatePagesRetPhyAddr);
+
+    gBS->SetMem((VOID *)allocatePagesRetPhyAddr, (UINTN)allocatePagesSelBytes, (UINT8)SetValue);
+    // show memory value
     ptr = (UINT8 *)allocatePagesRetPhyAddr;
 
     for (UINT8 i = 0; i < 64; i++)
@@ -2337,62 +2389,22 @@ AllocatePageMemoryAnyPages(IN EFI_ALLOCATE_TYPE allocateTypeSel)
         ptr++;
       }
     }
-#endif
 
-    Print(L"\r\nDo you want to fill memory with value ?(y/n) :");
-    Status = SelYorNMenu("", &retYorN);
-    if (Status == EFI_SUCCESS)
-    {
-      //Print(L"\r\nPass");
-    }
-    else
-    {
-      Print(L"\r\n%S Error Code = %x !", __FUNCTION__, Status);
-    }
-    // fill value in memory
-    switch (retYorN)
-    {
-    case 1: // y -> fill in value
-      Input2HexToUInt64(&SetValue);
-      //Print(L"SetValue=%02x", SetValue);
-      //Print(L"\r\nallocatePagesSelBytes=%x", &allocatePagesRetPhyAddr);
-      //Print(L"\r\nallocatePagesSelBytes=%x", allocatePagesRetPhyAddr);
-
-      gBS->SetMem((VOID *)allocatePagesRetPhyAddr, (UINTN)allocatePagesSelBytes, (UINT8)SetValue);
-// show memory value
-#if 1
-      ptr = (UINT8 *)allocatePagesRetPhyAddr;
-
-      for (UINT8 i = 0; i < 64; i++)
-      {
-        if (i % 16 == 0)
-        {
-          Print(L"\r\n%02x:", i);
-        }
-        else if (i % 16 == 7)
-        {
-          Print(L" -");
-        }
-        else if (i % 16 == 15)
-        {
-          Print(L" %02x *................*", *ptr);
-          ptr++;
-        }
-        else
-        {
-          Print(L" %02x", *ptr);
-          ptr++;
-        }
-      }
-#endif
-
-      break;
-    case 0: // n -> ignore
-      break;
-    }
-    PressAnyKeyToContinue();
+    break;
+  case 0: // n -> ignore
     break;
   }
+#endif
+
+    break;
+  } // end of switch case: allocate all memory or not
+
+  if (NotImplementCustomizeAllocatedPages)
+  { // not implement function exit
+    return EFI_SUCCESS;
+  }
+  Print(L"\r\n Free Allocated Memory");
+  PressAnyKeyToContinue();
   temp = head;
   count = 0;
   while (temp->next != NULL)
