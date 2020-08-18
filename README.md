@@ -4,3 +4,4 @@ My Edk2 Shell Utility
 2. BIOS Data Area Utility
 3. CMOS Utility
 4. Memory Utility
+Note: Part of functions are still under construction
