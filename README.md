@@ -1,5 +1,6 @@
 # DevEdk2EfiShellUti
 My Edk2 Shell Utility
-1. PciTable U.
-2. BIOS Data U.
-3. CMOS Table U.
+1. Pci Utility
+2. BIOS Data Area Utility
+3. CMOS Utility
+4. Memory Utility
